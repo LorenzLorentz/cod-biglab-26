@@ -80,34 +80,104 @@ module lab2_top (
     output wire       video_de      // 行数据有效信号，用于区分消隐区
 );
 
-  /* =========== Demo code begin =========== */
+    /* =========== Demo code begin =========== */
 
-  // PLL 分频示例
-  logic locked, clk_10M, clk_20M;
-  pll_example clock_gen (
-      // Clock in ports
-      .clk_in1(clk_50M),  // 外部时钟输入
-      // Clock out ports
-      .clk_out1(clk_10M),  // 时钟输出 1，频率在 IP 配置界面中设置
-      .clk_out2(clk_20M),  // 时钟输出 2，频率在 IP 配置界面中设置
-      // Status and control signals
-      .reset(reset_btn),  // PLL 复位输入
-      .locked(locked)  // PLL 锁定指示输出，"1"表示时钟稳定，
-                       // 后级电路复位信号应当由它生成（见下）
-  );
+    // PLL 分频示例
+    logic locked, clk_10M, clk_20M;
+    pll_example clock_gen (
+        // Clock in ports
+        .clk_in1(clk_50M),  // 外部时钟输入
+        // Clock out ports
+        .clk_out1(clk_10M),  // 时钟输出 1，频率在 IP 配置界面中设置
+        .clk_out2(clk_20M),  // 时钟输出 2，频率在 IP 配置界面中设置
+        // Status and control signals
+        .reset(reset_btn),  // PLL 复位输入
+        .locked(locked)  // PLL 锁定指示输出，"1"表示时钟稳定，
+                        // 后级电路复位信号应当由它生成（见下）
+    );
 
-  logic reset_of_clk10M;
-  // 异步复位，同步释放，将 locked 信号转为后级电路的复位 reset_of_clk10M
-  always_ff @(posedge clk_10M or negedge locked) begin
-    if (~locked) reset_of_clk10M <= 1'b1;
-    else reset_of_clk10M <= 1'b0;
-  end
+    logic reset_of_clk10M;
+    // 异步复位，同步释放，将 locked 信号转为后级电路的复位 reset_of_clk10M
+    always_ff @(posedge clk_10M or negedge locked) begin
+        if (~locked) reset_of_clk10M <= 1'b1;
+        else reset_of_clk10M <= 1'b0;
+    end
 
-  /* =========== Demo code end =========== */
+    /* =========== Demo code end =========== */
 
-  // TODO: 内部信号声明
+    // TODO: 内部信号声明
+    // 控制命令
+    logic trigger;
 
-  // TODO: 实验模块例化
+    // 连接寄存器堆模块的信号
+    logic [4:0] rf_raddr_a;
+    logic [15:0] rf_data_a;
+    logic [4:0] rf_raddr_b;
+    logic [15:0] rf_data_b;
+    logic [4:0] rf_waddr;
+    logic [15:0] rf_wdata;
+    logic rf_we;
 
+    // 连接alu模块的信号
+    logic [15:0] alu_a;
+    logic [15:0] alu_b;
+    logic [15:0] alu_op;
+    logic [15:0] alu_y;
 
+    // TODO: 实验模块例化
+
+    // button in
+    button_in button_in_m (
+        .clk(clk_10M),
+        .rst(reset_of_clk10M),
+        .push_btn(push_btn),
+        .trigger(trigger),
+    );
+
+    // controller
+    controller controller_m (
+        .clk(clk_10M),
+        .rst(reset_of_clk10M),
+
+        .step(trigger),
+        .dip_sw(dip_sw),
+        .leds(leds),
+
+        .rf_raddr_a(rf_raddr_a),
+        .rf_rdata_a(rf_data_a),
+        .rf_raddr_b(rf_raddr_b),
+        .rf_rdata_b(rf_data_b),
+
+        .rf_waddr(rf_waddr),
+        .rf_wdata(rf_wdata),
+        .rf_we(rf_we),
+
+        .alu_a(alu_a),
+        .alu_b(alu_b),
+        .alu_op(alu_op),
+        .alu_y(alu_y),
+    );
+
+    // register file
+    reg_file reg_file_m (
+        .clk(clk_10M),
+        .rst(reset_of_clk10M),
+
+        .raddr_a(rf_raddr_a),
+        .rdata_a(rf_data_a),
+        .raddr_b(rf_raddr_b),
+        .rdata_b(rf_data_b),
+
+        .waddr(rf_waddr),
+        .wdata(rf_wdata),
+        .we(rf_we),
+    );
+
+    // alu
+    alu alu_m (
+        .a(alu_a),
+        .b(alu_b),
+        .op(alu_op),
+        .y(alu_y)
+    );
 endmodule
