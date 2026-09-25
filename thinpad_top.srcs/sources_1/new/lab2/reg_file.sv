@@ -19,7 +19,7 @@ module reg_file (
     assign rdata_b = (raddr_b == 5'd0) ? 16'h0 : rf[raddr_b];
 
     // 时序逻辑: 写操作
-    always_ff @(posedge clk or posedge rst) begin
+    always_ff @(posedge clk) begin
         if (rst) begin
             for (int i = 0; i < 32; i++) begin
                 rf[i] <= 16'h0;

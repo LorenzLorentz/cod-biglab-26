@@ -111,9 +111,9 @@ module lab2_top (
 
     // 连接寄存器堆模块的信号
     logic [4:0] rf_raddr_a;
-    logic [15:0] rf_data_a;
+    logic [15:0] rf_rdata_a;
     logic [4:0] rf_raddr_b;
-    logic [15:0] rf_data_b;
+    logic [15:0] rf_rdata_b;
     logic [4:0] rf_waddr;
     logic [15:0] rf_wdata;
     logic rf_we;
@@ -121,7 +121,7 @@ module lab2_top (
     // 连接alu模块的信号
     logic [15:0] alu_a;
     logic [15:0] alu_b;
-    logic [15:0] alu_op;
+    logic [3:0] alu_op;
     logic [15:0] alu_y;
 
     // TODO: 实验模块例化
@@ -131,7 +131,7 @@ module lab2_top (
         .clk(clk_10M),
         .rst(reset_of_clk10M),
         .push_btn(push_btn),
-        .trigger(trigger),
+        .trigger(trigger)
     );
 
     // controller
@@ -144,9 +144,9 @@ module lab2_top (
         .leds(leds),
 
         .rf_raddr_a(rf_raddr_a),
-        .rf_rdata_a(rf_data_a),
+        .rf_rdata_a(rf_rdata_a),
         .rf_raddr_b(rf_raddr_b),
-        .rf_rdata_b(rf_data_b),
+        .rf_rdata_b(rf_rdata_b),
 
         .rf_waddr(rf_waddr),
         .rf_wdata(rf_wdata),
@@ -155,7 +155,7 @@ module lab2_top (
         .alu_a(alu_a),
         .alu_b(alu_b),
         .alu_op(alu_op),
-        .alu_y(alu_y),
+        .alu_y(alu_y)
     );
 
     // register file
@@ -164,13 +164,13 @@ module lab2_top (
         .rst(reset_of_clk10M),
 
         .raddr_a(rf_raddr_a),
-        .rdata_a(rf_data_a),
+        .rdata_a(rf_rdata_a),
         .raddr_b(rf_raddr_b),
-        .rdata_b(rf_data_b),
+        .rdata_b(rf_rdata_b),
 
         .waddr(rf_waddr),
         .wdata(rf_wdata),
-        .we(rf_we),
+        .we(rf_we)
     );
 
     // alu

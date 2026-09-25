@@ -11,3 +11,12 @@ thinpad_top.ip_user_files/
 /.lint/
 /.Xil
 /.Xilinx
+
+# 本地构建
+docker
+scripts
+build/
+sim/
+flow.env
+__pycache__/
+Makefile

@@ -15,7 +15,7 @@ module button_in(
         end else begin
             btn_sync <= {btn_sync[0], push_btn};
             button_in <= btn_sync[1];
-            trigger <= btn_sync[1] & ~btn_sync[0];
+            trigger <= btn_sync[1] & ~button_in;
         end
     end
 endmodule
