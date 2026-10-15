@@ -25,9 +25,11 @@ module sram_controller #(
     // sram interface
     output reg [SRAM_ADDR_WIDTH-1:0] sram_addr,
     inout wire [SRAM_DATA_WIDTH-1:0] sram_data,
-    output reg sram_ce_n, // 使用 SRAM 时, 需要保证 base_ram_ce_n=0
-    output reg sram_oe_n, // 输出使能, 对于读操作, 需要保证 base_ram_oe_n=0; 对于写操作, 需要保证 base_ram_oe_n=1
-    output reg sram_we_n, // 写入使能, 读操作对应 base_ram_we_n=1, 写操作对应 base_ram_we_n=0
+    // verilator lint_off PROCASSINIT
+    output reg sram_ce_n = 1'b1, // 使用 SRAM 时, 需要保证 base_ram_ce_n=0
+    output reg sram_oe_n = 1'b1, // 输出使能, 对于读操作, 需要保证 base_ram_oe_n=0; 对于写操作, 需要保证 base_ram_oe_n=1
+    output reg sram_we_n = 1'b1, // 写入使能, 读操作对应 base_ram_we_n=1, 写操作对应 base_ram_we_n=0
+    // verilator lint_on PROCASSINIT
     output reg [SRAM_BYTES-1:0] sram_be_n // 字节使能, 目的是实现部分写入, 例如只想写入四个字节其中一个, 就把相应位设置为 0
 );
 
@@ -123,7 +125,7 @@ module sram_controller #(
             sram_addr <= '0;
             // sram_data <= '0;
             sram_ce_n <= 1'b1;
-            sram_oe_n <= 1'b0;
+            sram_oe_n <= 1'b1;
             sram_we_n <= 1'b1;
             sram_be_n <= '0;
         end else begin
@@ -146,7 +148,7 @@ module sram_controller #(
                 end
 
                 ST_READ_2: begin
-                    wb_dat_o <= sram_data_i;
+                    // wb_dat_o <= sram_data_i;
                 end
 
                 ST_WRITE: begin
@@ -171,8 +173,13 @@ module sram_controller #(
                 end
 
                 ST_DONE: begin
+                    if (state == ST_READ_2) begin
+                        wb_dat_o <= sram_data_i;
+                    end
+
                     sram_data_t <= 1'b1;
                     sram_ce_n <= 1'b1;
+                    sram_oe_n <= 1'b1;
                     wb_ack_o <= 1'b1;
                 end
 

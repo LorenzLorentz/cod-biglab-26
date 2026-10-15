@@ -47,7 +47,10 @@ module lab4_master #(
         ST_WRITE_WAIT_ACTION = 4'b0111, // 正在读取状态寄存器
         ST_WRITE_WAIT_CHECK = 4'b1000, // 读取了状态寄存器当前的取值, 判断是否可以写入新的值
         ST_WRITE_DATA_ACTION = 4'b1001, // 正在写入数据寄存器
-        ST_WRITE_DATA_DONE = 4'b1010 // 完成写入数据寄存器，进入下面的操作
+        ST_WRITE_DATA_DONE = 4'b1010, // 完成写入数据寄存器，进入下面的操作
+
+        // 结束
+        ST_FINISH = 4'b1011 // 10 次完成，停在这里直到复位
     } state_t;
 
     state_t state;
@@ -79,7 +82,7 @@ module lab4_master #(
 
             ST_READ_WAIT_CHECK: begin
                 if (wb_ack_i) begin
-                    if (wb_dat_i[0]) begin
+                    if (wb_dat_i[8]) begin
                         next_state = ST_READ_DATA_ACTION;
                     end else begin
                         next_state = ST_READ_WAIT_ACTION;
@@ -115,7 +118,7 @@ module lab4_master #(
 
             ST_WRITE_WAIT_CHECK: begin
                 if (wb_ack_i) begin
-                    if (wb_dat_i[5]) begin
+                    if (wb_dat_i[13]) begin
                         next_state = ST_WRITE_DATA_ACTION;
                     end else begin
                         next_state = ST_WRITE_WAIT_ACTION;
@@ -130,11 +133,15 @@ module lab4_master #(
             ST_WRITE_DATA_DONE: begin
                 if (wb_ack_i) begin
                     if (cnt==4'd9) begin
-                        next_state = ST_IDLE;
+                        next_state = ST_FINISH;
                     end else begin
                         next_state = ST_READ_WAIT_ACTION;
                     end
                 end
+            end
+
+            ST_FINISH: begin
+                next_state = ST_FINISH; // 结束后保持不动, 不再发起总线请求
             end
 
             default: begin
@@ -174,7 +181,7 @@ module lab4_master #(
                     wb_cyc_o <= 1'b1;
                     wb_stb_o <= 1'b1;
                     wb_we_o <= 1'b0;
-                    wb_sel_o <= 4'b0001;
+                    wb_sel_o <= 4'b0010;
 
                     wb_adr_o <= UART_STATUS_ADDR;
                 end
@@ -234,7 +241,7 @@ module lab4_master #(
                     wb_cyc_o <= 1'b1;
                     wb_stb_o <= 1'b1;
                     wb_we_o <= 1'b0;
-                    wb_sel_o <= 4'b0001;
+                    wb_sel_o <= 4'b0010;
 
                     wb_adr_o <= UART_STATUS_ADDR;
                 end
