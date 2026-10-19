@@ -7,6 +7,7 @@ module sig_gen(
     output logic mem_req, // mem 请求使能
     output logic mem_we, // mem 写使能
     output logic [3:0] mem_sel, // mem 读写位宽, 0 表示 byte, 1 表示 word
+    output logic mem_load_is_unsigned, // mem load 的时候是否是signed
     output logic alu_a_sel, // alu_a 选择
     output logic alu_b_sel, // alu_b 选择
     output logic [1:0] alu_op, // alu_op 选择

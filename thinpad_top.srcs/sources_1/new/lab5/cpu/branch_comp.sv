@@ -2,7 +2,7 @@ module branch_comp (
     input logic [31:0] a,
     input logic [31:0] b,
 
-    output logic breq
+    output logic br_eq
 );
-    assign breq = (a==b);
+    assign br_eq = (a==b);
 endmodule

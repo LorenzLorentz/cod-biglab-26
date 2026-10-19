@@ -56,7 +56,7 @@ module cpu_top (
         logic mem_req; // MEM 需要
         logic mem_we; // MEM 需要
         logic [3:0] mem_sel; // MEM 需要
-        logic mem_load_is_signed;// MEM 需要
+        logic mem_load_is_unsigned;// MEM 需要
         logic [4:0] rd; // WB 需要
         logic [31:0] pc_plus_4; // WB 需要
         logic rf_w_en; // WB 需要
@@ -77,7 +77,7 @@ module cpu_top (
         logic mem_req;
         logic mem_we;
         logic [3:0] mem_sel;
-        logic mem_load_is_signed;
+        logic mem_load_is_unsigned;
 
         // 后续需要
         logic [4:0] rd; // WB 需要
@@ -95,101 +95,183 @@ module cpu_top (
         // 访问地址
         logic [4:0] rd;
         // 写入内容
-        logic [31:0] wb_data; // 注意根据 mem_sel 和 mem_load_is_signed 做扩展
+        logic [31:0] wb_data; // 注意根据 mem_sel 和 mem_load_is_unsigned 做扩展
         // 相关使能
         logic rf_w_en;
-        // logic [1:0] wb_sel;
     } mem_wb_t;
 
-    if_id_t if_id;
-    id_ex_t id_ex;
-    ex_mem_t ex_mem;
-    mem_wb_t mem_wb;
+    if_id_t if_id, if_id_next;
+    id_ex_t id_ex, id_ex_next;
+    ex_mem_t ex_mem, ex_mem_next;
+    mem_wb_t mem_wb, mem_wb_next;
+
+    // TODO
+    // 1. 仲裁?
+    // 2. stall and flush?
 
     // 执行
-    // decode
+    // 1. IF阶段
+    // 内部状态
+    logic [31:0] pc;
+    logic [31:0] pc_plus_4;
+    logic [31:0] pc_next;
+
+    assign pc_plus_4 = pc + 4;
+    assign pc_next = pc_plus_4;
+
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            pc <= 32'h8000_0000;
+        end else begin
+            pc <= pc_next;
+        end
+    end
+
+    assign inst_req = 1'b1;
+    assign inst_addr = pc;
+
+    // 传递
+    always_comb begin
+        if_id_next.valid = 1'b1;
+        if_id_next.inst = inst_data;
+        if_id_next.pc = pc;
+        if_id_next.pc_plus_4 = pc_plus_4;
+    end
+
+    // 2. ID阶段
+    // 内部状态
+    logic [6:0] opcode;
+    logic [4:0] rs1;
+    logic [4:0] rs2;
+    logic [2:0] funct3;
+    logic [6:0] funct7;
+    logic [2:0] imm_type;
+
+    // inst decode
     inst_decoder u_inst_decoder (
-        .inst(inst),
+        .inst(if_id.inst),
         .opcode(opcode),
         .rs1(rs1),
         .rs2(rs2),
-        .rd(rd),
+        .rd(id_ex_next.rd),
         .imm_type(imm_type),
         .funct3(funct3),
         .funct7(funct7)
     );
-
-    assign is_load = (opcode == 7'b0000011);
-    assign is_store = (opcode == 7'b0100011);
-    assign is_mem_access = is_load || is_store;
 
     // sig gen
     sig_gen u_sig_gen (
         .opcode(opcode),
         .funct3(funct3),
         .funct7(funct7),
-        .rf_w_en(rf_w_en),
-        .mem_req(mem_req),
-        .mem_we(mem_we),
-        .mem_sel(mem_sel),
-        .alu_a_sel(alu_a_sel),
-        .alu_b_sel(alu_b_sel),
-        .alu_op(alu_op),
-        .pc_sel(pc_sel),
-        .wb_sel(wb_sel)
+        .rf_w_en(id_ex_next.rf_w_en),
+        .mem_req(id_ex_next.mem_req),
+        .mem_we(id_ex_next.mem_we),
+        .mem_sel(id_ex_next.mem_sel),
+        .mem_load_is_unsigned(id_ex_next.mem_load_is_unsigned),
+        .alu_a_sel(id_ex_next.alu_a_sel),
+        .alu_b_sel(id_ex_next.alu_b_sel),
+        .alu_op(id_ex_next.alu_op),
+        .pc_sel(id_ex_next.pc_sel),
+        .wb_sel(id_ex_next.wb_sel)
     );
 
     // imm gen
     imm_gen u_imm_gen (
-        .inst(inst),
+        .inst(if_id.inst),
         .imm_type(imm_type),
-        .imm(imm)
+        .imm(id_ex_next.imm)
     );
 
-    // rf
+    // rf & 5. WB 阶段
     reg_file u_reg_file (
         .clk(clk),
         .rst(rst),
         .raddr_a(rs1),
-        .rdata_a(rf_rdata1),
+        .rdata_a(id_ex_next.rf_rdata1),
         .raddr_b(rs2),
-        .rdata_b(rf_rdata2),
-        .waddr(rd),
-        .wdata(rf_wdata),
-        .we(rf_commit_en)
+        .rdata_b(id_ex_next.rf_rdata2),
+        .waddr(mem_wb.rd),
+        .wdata(mem_wb.wb_data),
+        .we(mem_wb.rf_w_en)
     );
+
+    // 传递
+    always_comb begin
+        id_ex_next.valid = if_id.valid;
+        id_ex_next.pc = if_id.pc;
+        id_ex_next.pc_plus_4 = if_id.pc_plus_4;
+    end
+
+    // 3. EX 阶段
+    // 内部状态
+    logic [31:0] alu_a;
+    logic [31:0] alu_b;
 
     // alu
     // alu_a: 0 -> data; 1 -> pc
     // alu_b: 0 -> data; 1 -> imm
-    assign alu_a = alu_a_sel ? pc : rf_rdata1;
-    assign alu_b = alu_b_sel ? imm : rf_rdata2;
+    assign alu_a = id_ex.alu_a_sel ? id_ex.pc : id_ex.rf_rdata1;
+    assign alu_b = id_ex.alu_b_sel ? id_ex.imm : id_ex.rf_rdata2;
 
     alu u_alu (
         .a(alu_a),
         .b(alu_b),
-        .op(alu_op),
-        .result(alu_result)
+        .op(id_ex.alu_op),
+        .result(ex_mem_next.alu_result)
     );
 
     // br
     branch_comp u_branch_comp (
-        .a(rf_rdata1),
-        .b(rf_rdata2),
-        .breq(br_eq)
+        .a(id_ex.rf_rdata1),
+        .b(id_ex.rf_rdata2),
+        .br_eq(br_eq)
     );
 
-    // mem
-    assign mem_addr = alu_result;
-    assign mem_wdata = rf_rdata2;
+    // 传递
+    always_comb begin
+        ex_mem_next.valid = id_ex.valid;
+        ex_mem_next.rf_rdata2 = id_ex.rf_rdata2;
+        ex_mem_next.mem_req = id_ex.mem_req;
+        ex_mem_next.mem_we = id_ex.mem_we;
+        ex_mem_next.mem_sel = id_ex.mem_sel;
+        ex_mem_next.mem_load_is_unsigned = id_ex.mem_load_is_unsigned;
+        ex_mem_next.rd = id_ex.rd;
+        ex_mem_next.pc_plus_4 = id_ex.pc_plus_4;
+        ex_mem_next.rf_w_en = id_ex.rf_w_en;
+        ex_mem_next.wb_sel = id_ex.wb_sel;
+    end
 
-    // wb
+    // 4. MEM 阶段
+    assign mem_req = ex_mem.mem_req;
+    assign mem_addr = ex_mem.alu_result;
+    assign mem_wdata = ex_mem.rf_rdata2;
+    assign mem_we = ex_mem.mem_we;
+    assign mem_sel = ex_mem.mem_sel;
+
     // wb_sel: 0 -> mem_rdata (符号扩展); 1 -> alu_result; 2 -> pc + 4
-    assign rf_wdata = (wb_sel == 2'b00) ? {{24{mem_rdata[7]}}, mem_rdata[7:0]} :
-        (wb_sel == 2'b01) ? alu_result : pc_plus_4;
+    assign mem_wb_next.wb_data = (ex_mem.wb_sel == 2'b00) ? {{24{mem_rdata[7]}}, mem_rdata[7:0]} :
+        (ex_mem.wb_sel == 2'b01) ? ex_mem_next.alu_result : ex_mem_next.pc_plus_4;
 
-    // next pc
-    // pc_sel: 0 -> pc + 4; 1 -> alu result; 2 -> mem_rdata
-    assign next_pc = (pc_sel == 2'b00 || !br_eq) ? pc_plus_4 :
-        (pc_sel == 2'b01) ? alu_result : mem_rdata;
+    // 传递
+    always_comb begin
+        mem_wb_next.valid = ex_mem.valid;
+        mem_wb_next.rd = ex_mem.rd;
+        mem_wb_next.rf_w_en = ex_mem.rf_w_en;
+    end
+
+    // 状态更新
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            if_id <= '0;
+            id_ex <= '0;
+            ex_mem <= '0;
+            mem_wb <= '0;
+        end else begin
+            if_id <= if_id_next;
+            id_ex <= id_ex_next;
+            ex_mem <= ex_mem_next;
+            mem_wb <= mem_wb_next;
+        end
+    end
 endmodule
