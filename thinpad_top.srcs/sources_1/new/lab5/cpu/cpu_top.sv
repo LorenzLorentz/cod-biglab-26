@@ -36,6 +36,10 @@ module cpu_top (
         // 是否有效
         logic valid;
 
+        // forwarding
+        logic [4:0] rs1;
+        logic [4:0] rs2;
+
         // EX 需要
         // alu_a
         logic [31:0] rf_rdata1; // 从 RegFile 读出的 rs1 数据; sel = 0
@@ -105,9 +109,17 @@ module cpu_top (
     ex_mem_t ex_mem, ex_mem_next;
     mem_wb_t mem_wb, mem_wb_next;
 
-    // TODO
-    // 1. 仲裁?
-    // 2. stall and flush?
+    // 控制信号
+    // stall
+    logic pc_stall;
+    logic if_id_stall;
+    logic id_ex_stall;
+    logic global_stall;
+    assign global_stall = ~mem_ready || ~inst_ready;
+
+    // flush
+    logic if_id_flush;
+    logic id_ex_flush;
 
     // 执行
     // 1. IF阶段
@@ -122,6 +134,8 @@ module cpu_top (
     always_ff @(posedge clk) begin
         if (rst) begin
             pc <= 32'h8000_0000;
+        end else if (global_stall || pc_stall) begin
+            pc <= pc;
         end else begin
             pc <= pc_next;
         end
@@ -196,9 +210,19 @@ module cpu_top (
         .we(mem_wb.rf_w_en)
     );
 
+    // stall
+    logic load_use_hazard;
+    assign load_use_hazard = (id_ex.wb_sel == 2'b00 && id_ex.mem_req)
+        && ((id_ex.rd == rs1) || (id_ex.rd == rs2));
+    assign pc_stall = load_use_hazard;
+    assign if_id_stall = pc_stall;
+    assign id_ex_flush = pc_stall;
+
     // 传递
     always_comb begin
         id_ex_next.valid = if_id.valid;
+        id_ex_next.rs1 = rs1;
+        id_ex_next.rs2 = rs2;
         id_ex_next.pc = if_id.pc;
         id_ex_next.pc_plus_4 = if_id.pc_plus_4;
     end
@@ -207,12 +231,35 @@ module cpu_top (
     // 内部状态
     logic [31:0] alu_a;
     logic [31:0] alu_b;
+    logic br_eq;
+    logic [31:0] data1_with_forwarding_considered;
+    logic [31:0] data2_with_forwarding_considered;
 
     // alu
+    // forwarding
+    always_comb begin
+        data1_with_forwarding_considered = id_ex.rf_rdata1;
+        data2_with_forwarding_considered = id_ex.rf_rdata2;
+
+        if (ex_mem.rf_w_en && (ex_mem.rd == id_ex.rs1)) begin // 要写回但还没有
+            data1_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
+                : ex_mem.pc_plus_4;
+        end else if (mem_wb.rf_w_en && (mem_wb.rd == id_ex.rs1)) begin
+            data1_with_forwarding_considered = mem_wb.wb_data;
+        end
+
+        if (ex_mem.rf_w_en && (ex_mem.rd == id_ex.rs2)) begin
+            data2_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
+                : ex_mem.pc_plus_4;
+        end else if (mem_wb.rf_w_en && (mem_wb.rd == id_ex.rs2)) begin
+            data2_with_forwarding_considered = mem_wb.wb_data;
+        end
+    end
+
     // alu_a: 0 -> data; 1 -> pc
     // alu_b: 0 -> data; 1 -> imm
-    assign alu_a = id_ex.alu_a_sel ? id_ex.pc : id_ex.rf_rdata1;
-    assign alu_b = id_ex.alu_b_sel ? id_ex.imm : id_ex.rf_rdata2;
+    assign alu_a = id_ex.alu_a_sel ? id_ex.pc : data1_with_forwarding_considered;
+    assign alu_b = id_ex.alu_b_sel ? id_ex.imm : data2_with_forwarding_considered;
 
     alu u_alu (
         .a(alu_a),
@@ -227,6 +274,10 @@ module cpu_top (
         .b(id_ex.rf_rdata2),
         .br_eq(br_eq)
     );
+
+    // flush
+    assign if_id_flush = br_eq;
+    assign id_ex_flush = br_eq;
 
     // 传递
     always_comb begin
@@ -251,7 +302,7 @@ module cpu_top (
 
     // wb_sel: 0 -> mem_rdata (符号扩展); 1 -> alu_result; 2 -> pc + 4
     assign mem_wb_next.wb_data = (ex_mem.wb_sel == 2'b00) ? {{24{mem_rdata[7]}}, mem_rdata[7:0]} :
-        (ex_mem.wb_sel == 2'b01) ? ex_mem_next.alu_result : ex_mem_next.pc_plus_4;
+        (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result : ex_mem.pc_plus_4;
 
     // 传递
     always_comb begin
@@ -267,9 +318,28 @@ module cpu_top (
             id_ex <= '0;
             ex_mem <= '0;
             mem_wb <= '0;
+        end else if (global_stall) begin
+            if_id <= if_id;
+            id_ex <= id_ex;
+            ex_mem <= ex_mem;
+            mem_wb <= mem_wb;
         end else begin
-            if_id <= if_id_next;
-            id_ex <= id_ex_next;
+            if (if_id_flush) begin
+                if_id <= '0; // flush
+            end else if (if_id_stall) begin
+                if_id <= if_id; // stall
+            end else begin
+                if_id <= if_id_next;
+            end
+
+            if (id_ex_flush) begin
+                id_ex <= '0; // flush
+            end else if (id_ex_stall) begin
+                id_ex <= id_ex; // stall
+            end else begin
+                id_ex <= id_ex_next;
+            end
+
             ex_mem <= ex_mem_next;
             mem_wb <= mem_wb_next;
         end
