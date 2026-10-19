@@ -257,6 +257,8 @@ module cpu_top (
     );
 
     // alu
+    // alu_a: 0 -> pc; 1 -> data
+    // alu_b: 0 -> data; 1 -> imm
     assign alu_a = alu_a_sel ? pc : rf_rdata1;
     assign alu_b = alu_b_sel ? imm : rf_rdata2;
 
@@ -275,10 +277,12 @@ module cpu_top (
     );
 
     // wb
+    // wb_sel: 0 -> mem_rdata; 1 -> alu_result; 2 -> pc + 4
     assign rf_wdata = (wb_sel == 2'b00) ? mem_rdata :
         (wb_sel == 2'b01) ? alu_result : pc_plus_4;
 
     // next pc
+    // pc_sel: 0 -> pc + 4; 1 -> alu result; 2 -> mem_rdata
     assign next_pc = (pc_sel == 2'b00 || !br_eq) ? pc_plus_4 :
         (pc_sel == 2'b01) ? alu_result : mem_rdata;
 endmodule
