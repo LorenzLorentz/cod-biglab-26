@@ -17,52 +17,94 @@ module cpu_top (
     output logic [3:0] mem_sel,
     input mem_ready
 );
-    // 内部状态
-    // 1. IF 阶段
-    logic [31:0] pc; // 当前 PC 寄存器值
-    logic [31:0] next_pc; // 下一个周期 PC 的候选值
-    logic [31:0] pc_plus_4; // pc + 4 的顺序加法结果
+    // 流水线寄存器
+    // IF -> ID
+    typedef struct packed {
+        // 是否有效
+        logic valid;
 
-    // 2.1 ID 阶段
-    // 数据
-    logic [31:0] inst; // 当前执行的指令
-    logic [6:0] opcode;
-    logic [4:0] rs1;
-    logic [4:0] rs2;
-    logic [4:0] rd;
-    logic [2:0] funct3;
-    logic [6:0] funct7;
-    logic [2:0] imm_type;
-    logic [31:0] imm;
+        // ID 需要
+        logic [31:0] inst;
 
-    // 信号
-    logic rf_w_en; // reg file 写使能
-    // logic mem_rw; // mem 读写使能, 0 读 1 写
-    // logic mem_width; // mem 读写位宽, 0 表示 byte, 1 表示 word
-    logic alu_a_sel; // alu_a 选择
-    logic alu_b_sel; // alu_b 选择
-    logic [1:0] pc_sel; // pc 信号选择
-    logic [1:0] wb_sel; // 写回选择
+        // 后续需要
+        logic [31:0] pc; // EX 需要
+        logic [31:0] pc_plus_4; // WB 需要
+    } if_id_t;
 
-    // 状态
-    logic is_load;
-    logic is_store;
-    logic is_mem_access;
-    logic rf_commit_en;
+    // ID -> EX
+    typedef struct packed {
+        // 是否有效
+        logic valid;
 
-    // 2.2 RF 阶段
-    logic [31:0] rf_rdata1; // 从 RegFile 读出的 rs1 数据
-    logic [31:0] rf_rdata2; // 从 RegFile 读出的 rs2 数据
+        // EX 需要
+        // alu_a
+        logic [31:0] rf_rdata1; // 从 RegFile 读出的 rs1 数据; sel = 0
+        logic [31:0] pc; // sel = 1
+        logic alu_a_sel; // alu_a 选择
+        // alu_b
+        logic [31:0] rf_rdata2; // 从 RegFile 读出的 rs2 数据; sel = 0
+        logic [31:0] imm; // sel = 1
+        logic alu_b_sel; // alu_b 选择
+        // alu_op
+        logic [1:0] alu_op;
+        // bc op
+        logic [1:0] bc_op; // 暂时不需要
+        // pc_sel
+        logic [1:0] pc_sel;
 
-    // 3. EX 阶段
-    logic [31:0] alu_a;
-    logic [31:0] alu_b;
-    logic [1:0] alu_op;
-    logic [31:0] alu_result;
-    logic br_eq;
+        // 后续需要
+        logic mem_req; // MEM 需要
+        logic mem_we; // MEM 需要
+        logic [3:0] mem_sel; // MEM 需要
+        logic mem_load_is_signed;// MEM 需要
+        logic [4:0] rd; // WB 需要
+        logic [31:0] pc_plus_4; // WB 需要
+        logic rf_w_en; // WB 需要
+        logic wb_sel; // WB 需要
+    } id_ex_t;
 
-    // 4. MEM 阶段
-    logic [31:0] rf_wdata; // 最终准备写回 RegFile 的数据
+    // EX -> MEM
+    typedef struct packed {
+        // 是否有效
+        logic valid;
+
+        // MEM 需要
+        // 访问地址
+        logic [31:0] alu_result;
+        // 写入内容
+        logic [31:0] rf_rdata2;
+        // 相关使能
+        logic mem_req;
+        logic mem_we;
+        logic [3:0] mem_sel;
+        logic mem_load_is_signed;
+
+        // 后续需要
+        logic [4:0] rd; // WB 需要
+        logic [31:0] pc_plus_4; // WB 需要
+        logic rf_w_en; // WB 需要
+        logic wb_sel; // WB 需要
+    } ex_mem_t;
+
+    // MEM -> WB
+    typedef struct packed {
+        // 是否有效
+        logic valid;
+
+        // WB 需要
+        // 访问地址
+        logic [4:0] rd;
+        // 写入内容
+        logic [31:0] wb_data; // 注意根据 mem_sel 和 mem_load_is_signed 做扩展
+        // 相关使能
+        logic rf_w_en;
+        // logic [1:0] wb_sel;
+    } mem_wb_t;
+
+    if_id_t if_id;
+    id_ex_t id_ex;
+    ex_mem_t ex_mem;
+    mem_wb_t mem_wb;
 
     // 执行
     // decode
@@ -143,7 +185,7 @@ module cpu_top (
 
     // wb
     // wb_sel: 0 -> mem_rdata (符号扩展); 1 -> alu_result; 2 -> pc + 4
-    assign rf_wdata = (wb_sel == 2'b00) ? {{24{mem_rdata[7]}}, mem_rdata} :
+    assign rf_wdata = (wb_sel == 2'b00) ? {{24{mem_rdata[7]}}, mem_rdata[7:0]} :
         (wb_sel == 2'b01) ? alu_result : pc_plus_4;
 
     // next pc
