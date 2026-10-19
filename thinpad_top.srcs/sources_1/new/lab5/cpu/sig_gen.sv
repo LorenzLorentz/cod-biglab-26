@@ -19,8 +19,8 @@ module sig_gen(
         mem_req = 0; // 默认不请求, 不写入
         mem_we = 0;
         mem_sel = 4'b0000;
-        alu_a = 0;
-        alu_b = 0;
+        alu_a_sel = 0;
+        alu_b_sel = 0;
         alu_op = 0;
         pc_sel = 0; // 默认走pc+4
         rf_w_en = 0; // 默认不写入
@@ -29,8 +29,8 @@ module sig_gen(
         case (opcode[6:2])
             // R-type
             5'b01100: begin // ADD
-                alu_a_sel = 1; // reg_rdata1
-                alu_b_sel = 1; // reg_rdata2
+                alu_a_sel = 0; // reg_rdata1
+                alu_b_sel = 0; // reg_rdata2
                 alu_op = 0; // ADD
                 rf_w_en = 1;
                 wb_sel = 1; // alu result
@@ -38,8 +38,8 @@ module sig_gen(
 
             // I-type
             5'b00100: begin // ADDI / ANDI
-                alu_a_sel = 1; // reg_rdata1
-                alu_b_sel = 0; // imm
+                alu_a_sel = 0; // reg_rdata1
+                alu_b_sel = 1; // imm
                 case (funct3)
                     3'b000:
                         alu_op = 0; // ADD
@@ -52,8 +52,8 @@ module sig_gen(
             end
 
             5'b00000: begin// LB
-                alu_a_sel = 1; // reg_rdata1
-                alu_b_sel = 0; // imm
+                alu_a_sel = 0; // reg_rdata1
+                alu_b_sel = 1; // imm
                 alu_op = 0; // ADD
                 mem_req = 1;
                 mem_we = 0;
@@ -64,8 +64,8 @@ module sig_gen(
 
             // S-type
             5'b01000: begin// SB, SW
-                alu_a_sel = 1; // reg_rdata1
-                alu_b_sel = 0; // imm
+                alu_a_sel = 0; // reg_rdata1
+                alu_b_sel = 1; // imm
                 alu_op = 0; // ADD
                 mem_req = 1;
                 case (funct3)
@@ -79,15 +79,15 @@ module sig_gen(
 
             // B-type:
             5'b11000: begin// BEQ
-                alu_a_sel = 0; // pc
-                alu_b_sel = 0; // imm
+                alu_a_sel = 1; // pc
+                alu_b_sel = 1; // imm
                 alu_op = 0; // ADD
                 pc_sel = 1; // alu result
             end
 
             // U-type:
             5'b01101: begin // LUI
-                alu_b_sel = 0; // imm
+                alu_b_sel = 1; // imm
                 alu_op = 2; // pass b
                 rf_w_en = 1;
                 wb_sel = 1; // alu result

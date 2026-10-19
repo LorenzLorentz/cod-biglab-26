@@ -37,8 +37,8 @@ module cpu_top (
 
     // 信号
     logic rf_w_en; // reg file 写使能
-    logic mem_rw; // mem 读写使能, 0 读 1 写
-    logic mem_width; // mem 读写位宽, 0 表示 byte, 1 表示 word
+    // logic mem_rw; // mem 读写使能, 0 读 1 写
+    // logic mem_width; // mem 读写位宽, 0 表示 byte, 1 表示 word
     logic alu_a_sel; // alu_a 选择
     logic alu_b_sel; // alu_b 选择
     logic [1:0] pc_sel; // pc 信号选择
@@ -57,7 +57,7 @@ module cpu_top (
     // 3. EX 阶段
     logic [31:0] alu_a;
     logic [31:0] alu_b;
-    logic [15:0] alu_op;
+    logic [1:0] alu_op;
     logic [31:0] alu_result;
     logic br_eq;
 
@@ -65,146 +65,6 @@ module cpu_top (
     logic [31:0] rf_wdata; // 最终准备写回 RegFile 的数据
 
     // 执行
-
-    // 总线
-    // 状态定义
-    typedef enum logic [1:0] {
-        ST_FETCH,
-        ST_EXEC,
-        ST_MEM
-    } state_t;
-
-    state_t state_reg;
-    state_t next_state;
-
-    // 锁存
-    logic [31:0] pc_reg;
-    logic [31:0] inst_data_reg;
-    logic [31:0] mem_addr_reg;
-    logic [31:0] mem_wdata_reg;
-    logic mem_we_reg;
-    logic [3:0] mem_sel_reg;
-
-    // 待锁存数据
-    logic [31:0] mem_wdata_value;
-    logic [3:0] mem_sel_value;
-
-    // 三段式状态机
-    // 1. 次态逻辑
-    always_comb begin
-        next_state = state_reg;
-
-        case (state_reg)
-            ST_FETCH: begin
-                if (inst_ready) begin
-                    next_state = ST_EXEC;
-                end
-            end
-            ST_EXEC: begin
-                next_state = is_mem_access ? ST_MEM : ST_FETCH;
-            end
-            ST_MEM: begin
-                if (mem_ready) begin
-                    next_state = ST_FETCH;
-                end
-            end
-            default: begin
-                next_state = ST_FETCH;
-            end
-        endcase
-    end
-
-    // 2. 时序逻辑
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            state_reg <= ST_FETCH;
-            pc_reg <= 32'h0;
-            inst_data_reg <= 32'h0000_0013; // nop: addi x0, x0, 0
-            mem_addr_reg <= 32'h0;
-            mem_wdata_reg <= 32'h0;
-            mem_we_reg <= 1'b0;
-            mem_sel_reg <= 4'b0000;
-        end else begin
-            state_reg <= next_state;
-
-            case (state_reg)
-                ST_FETCH: begin
-                    if (inst_ready) begin
-                        inst_data_reg <= inst_data;
-                    end
-                end
-
-                ST_EXEC: begin
-                    if (is_mem_access) begin
-                        mem_addr_reg <= alu_result;
-                        mem_wdata_reg <= mem_wdata_value;
-                        mem_we_reg <= is_store;
-                        mem_sel_reg <= mem_sel_value;
-                    end else begin
-                        pc_reg <= next_pc;
-                    end
-                end
-
-                ST_MEM: begin
-                    if (mem_ready) begin
-                        pc_reg <= next_pc;
-                    end
-                end
-
-                default: begin
-                end
-            endcase
-        end
-    end
-
-    // 3. 输出逻辑
-    always_comb begin
-        inst_req = 1'b0;
-        mem_req = 1'b0;
-        rf_commit_en = 1'b0;
-
-        case (funct3[1:0])
-            2'b00: begin // byte
-                mem_sel_value = 4'b0001 << alu_result[1:0];
-                mem_wdata_value = rf_rdata2 << {alu_result[1:0], 3'b000};
-            end
-            2'b01: begin // word
-                mem_sel_value = alu_result[1] ? 4'b1100 : 4'b0011;
-                mem_wdata_value = alu_result[1] ? (rf_rdata2 << 16) : rf_rdata2;
-            end
-            default: begin // full
-                mem_sel_value = 4'b1111;
-                mem_wdata_value = rf_rdata2;
-            end
-        endcase
-
-        case (state_reg)
-            ST_FETCH: begin
-                inst_req = 1'b1;
-            end
-            ST_EXEC: begin
-                rf_commit_en = rf_w_en && !is_mem_access;
-            end
-            ST_MEM: begin
-                mem_req = 1'b1;
-                rf_commit_en = rf_w_en && is_load && mem_ready;
-            end
-            default: begin
-            end
-        endcase
-    end
-
-    // 4. 状态绑定
-    assign pc = pc_reg;
-    assign inst = inst_data_reg;
-    assign pc_plus_4 = pc + 4;
-
-    assign inst_addr = pc;
-    assign mem_addr = mem_addr_reg;
-    assign mem_wdata = mem_wdata_reg;
-    assign mem_we = mem_we_reg;
-    assign mem_sel = mem_sel_reg;
-
     // decode
     inst_decoder u_inst_decoder (
         .inst(inst),
@@ -227,8 +87,9 @@ module cpu_top (
         .funct3(funct3),
         .funct7(funct7),
         .rf_w_en(rf_w_en),
-        .mem_rw(mem_rw),
-        .mem_width(mem_width),
+        .mem_req(mem_req),
+        .mem_we(mem_we),
+        .mem_sel(mem_sel),
         .alu_a_sel(alu_a_sel),
         .alu_b_sel(alu_b_sel),
         .alu_op(alu_op),
@@ -257,7 +118,7 @@ module cpu_top (
     );
 
     // alu
-    // alu_a: 0 -> pc; 1 -> data
+    // alu_a: 0 -> data; 1 -> pc
     // alu_b: 0 -> data; 1 -> imm
     assign alu_a = alu_a_sel ? pc : rf_rdata1;
     assign alu_b = alu_b_sel ? imm : rf_rdata2;
@@ -266,7 +127,7 @@ module cpu_top (
         .a(alu_a),
         .b(alu_b),
         .op(alu_op),
-        .y(alu_result)
+        .result(alu_result)
     );
 
     // br
@@ -276,9 +137,13 @@ module cpu_top (
         .breq(br_eq)
     );
 
+    // mem
+    assign mem_addr = alu_result;
+    assign mem_wdata = rf_rdata2;
+
     // wb
-    // wb_sel: 0 -> mem_rdata; 1 -> alu_result; 2 -> pc + 4
-    assign rf_wdata = (wb_sel == 2'b00) ? mem_rdata :
+    // wb_sel: 0 -> mem_rdata (符号扩展); 1 -> alu_result; 2 -> pc + 4
+    assign rf_wdata = (wb_sel == 2'b00) ? {{24{mem_rdata[7]}}, mem_rdata} :
         (wb_sel == 2'b01) ? alu_result : pc_plus_4;
 
     // next pc

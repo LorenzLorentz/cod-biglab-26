@@ -1,16 +1,16 @@
 module alu (
-    input logic [15:0] a,
-    input logic [15:0] b,
-    input logic [2:0] op,
+    input logic [31:0] a,
+    input logic [31:0] b,
+    input logic [1:0] op,
 
-    output logic [15:0] result
+    output logic [31:0] result
 );
     always_comb begin
         case (op)
-            3'd0: result = a + b; // ADD
-            3'd1: result = a & b; // AND
-            3'd2: result = b; // pass b
-            default: result = 16'b0;
+            2'd0: result = a + b; // ADD
+            2'd1: result = a & b; // AND
+            2'd2: result = b; // pass b
+            default: result = 32'b0;
         endcase
     end
 endmodule

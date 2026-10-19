@@ -17,17 +17,17 @@ module inst_decoder(
 
     assign opcode = inst[6:0]; // 7位
     assign rd = inst[11:7]; // 5位
-    assign rs1 = inst[18:14]; // 5位
-    assign rs2 = inst[23:19]; // 5位
+    assign rs1 = inst[19:15]; // 5位
+    assign rs2 = inst[24:20]; // 5位
     assign funct3 = inst[14:12]; // 3位
-    assign funct7 = inst[31:24]; // 7位
+    assign funct7 = inst[31:25]; // 7位
 
     // verilog_lint: waive-start parameter-name-style
     localparam logic [2:0] IMM_I = 3'b000; // 共5个, 3位
     localparam logic [2:0] IMM_S = 3'b001;
     localparam logic [2:0] IMM_B = 3'b010;
-    localparam logic [2:0] IMM_U = 3'b100;
-    localparam logic [2:0] IMM_J = 3'b101;
+    localparam logic [2:0] IMM_U = 3'b011;
+    localparam logic [2:0] IMM_J = 3'b100;
     localparam logic [2:0] IMM_X = 3'd0;
     // verilog_lint: waive-stop parameter-name-style
     always_comb begin
