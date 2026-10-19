@@ -4,5 +4,5 @@ module branch_comp (
 
     output logic breq
 );
-
+    assign breq = (a==b);
 endmodule
