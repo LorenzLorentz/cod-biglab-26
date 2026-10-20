@@ -115,7 +115,7 @@ module cpu_top (
     logic if_id_stall;
     logic id_ex_stall;
     logic global_stall;
-    assign global_stall = ~mem_ready || ~inst_ready;
+    assign global_stall = (inst_req && !inst_ready) || (mem_req  && !mem_ready);
 
     // flush
     logic if_id_flush;
