@@ -20,9 +20,6 @@ module cpu_top (
     // 流水线寄存器
     // IF -> ID
     typedef struct packed {
-        // 是否有效
-        logic valid;
-
         // ID 需要
         logic [31:0] inst;
 
@@ -33,9 +30,6 @@ module cpu_top (
 
     // ID -> EX
     typedef struct packed {
-        // 是否有效
-        logic valid;
-
         // forwarding
         logic [4:0] rs1;
         logic [4:0] rs2;
@@ -52,7 +46,7 @@ module cpu_top (
         // alu_op
         logic [1:0] alu_op;
         // bc op
-        logic [1:0] bc_op; // 暂时不需要
+        // logic [1:0] bc_op; // 暂时不需要
         // pc_sel
         logic [1:0] pc_sel;
 
@@ -60,18 +54,15 @@ module cpu_top (
         logic mem_req; // MEM 需要
         logic mem_we; // MEM 需要
         logic [3:0] mem_sel; // MEM 需要
-        logic mem_load_is_unsigned;// MEM 需要
+        // logic mem_load_is_unsigned;// MEM 需要
         logic [4:0] rd; // WB 需要
         logic [31:0] pc_plus_4; // WB 需要
         logic rf_w_en; // WB 需要
-        logic wb_sel; // WB 需要
+        logic [1:0] wb_sel; // WB 需要
     } id_ex_t;
 
     // EX -> MEM
     typedef struct packed {
-        // 是否有效
-        logic valid;
-
         // MEM 需要
         // 访问地址
         logic [31:0] alu_result;
@@ -81,20 +72,17 @@ module cpu_top (
         logic mem_req;
         logic mem_we;
         logic [3:0] mem_sel;
-        logic mem_load_is_unsigned;
+        // logic mem_load_is_unsigned;
 
         // 后续需要
         logic [4:0] rd; // WB 需要
         logic [31:0] pc_plus_4; // WB 需要
         logic rf_w_en; // WB 需要
-        logic wb_sel; // WB 需要
+        logic [1:0] wb_sel; // WB 需要
     } ex_mem_t;
 
     // MEM -> WB
     typedef struct packed {
-        // 是否有效
-        logic valid;
-
         // WB 需要
         // 访问地址
         logic [4:0] rd;
@@ -113,7 +101,6 @@ module cpu_top (
     // stall
     logic pc_stall;
     logic if_id_stall;
-    logic id_ex_stall;
     logic global_stall;
     assign global_stall = (inst_req && !inst_ready) || (mem_req  && !mem_ready);
 
@@ -129,7 +116,8 @@ module cpu_top (
     logic [31:0] pc_next;
 
     assign pc_plus_4 = pc + 4;
-    assign pc_next = pc_plus_4;
+    // pc_sel: 0 -> pc_plus_4; 1 -> alu_result (pc + offset)
+    assign pc_next = branch_taken ? ex_mem_next.alu_result : pc_plus_4;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -146,7 +134,6 @@ module cpu_top (
 
     // 传递
     always_comb begin
-        if_id_next.valid = 1'b1;
         if_id_next.inst = inst_data;
         if_id_next.pc = pc;
         if_id_next.pc_plus_4 = pc_plus_4;
@@ -182,7 +169,7 @@ module cpu_top (
         .mem_req(id_ex_next.mem_req),
         .mem_we(id_ex_next.mem_we),
         .mem_sel(id_ex_next.mem_sel),
-        .mem_load_is_unsigned(id_ex_next.mem_load_is_unsigned),
+        // .mem_load_is_unsigned(id_ex_next.mem_load_is_unsigned),
         .alu_a_sel(id_ex_next.alu_a_sel),
         .alu_b_sel(id_ex_next.alu_b_sel),
         .alu_op(id_ex_next.alu_op),
@@ -212,15 +199,13 @@ module cpu_top (
 
     // stall
     logic load_use_hazard;
-    assign load_use_hazard = (id_ex.wb_sel == 2'b00 && id_ex.mem_req)
-        && ((id_ex.rd == rs1) || (id_ex.rd == rs2));
+    assign load_use_hazard = (id_ex.mem_req && !id_ex.mem_we && id_ex.rf_w_en)
+        && (id_ex.rd != 5'b0) && ((id_ex.rd == rs1) || (id_ex.rd == rs2));
     assign pc_stall = load_use_hazard;
     assign if_id_stall = pc_stall;
-    assign id_ex_flush = pc_stall;
 
     // 传递
     always_comb begin
-        id_ex_next.valid = if_id.valid;
         id_ex_next.rs1 = rs1;
         id_ex_next.rs2 = rs2;
         id_ex_next.pc = if_id.pc;
@@ -232,34 +217,35 @@ module cpu_top (
     logic [31:0] alu_a;
     logic [31:0] alu_b;
     logic br_eq;
-    logic [31:0] data1_with_forwarding_considered;
-    logic [31:0] data2_with_forwarding_considered;
+    logic branch_taken;
+    logic [31:0] rf_rdata1_with_forwarding_considered;
+    logic [31:0] rf_rdata2_with_forwarding_considered;
 
     // alu
     // forwarding
     always_comb begin
-        data1_with_forwarding_considered = id_ex.rf_rdata1;
-        data2_with_forwarding_considered = id_ex.rf_rdata2;
+        rf_rdata1_with_forwarding_considered = id_ex.rf_rdata1;
+        rf_rdata2_with_forwarding_considered = id_ex.rf_rdata2;
 
-        if (ex_mem.rf_w_en && (ex_mem.rd == id_ex.rs1)) begin // 要写回但还没有
-            data1_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
+        if (ex_mem.rf_w_en && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs1)) begin // 要写回但还没有
+            rf_rdata1_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
                 : ex_mem.pc_plus_4;
-        end else if (mem_wb.rf_w_en && (mem_wb.rd == id_ex.rs1)) begin
-            data1_with_forwarding_considered = mem_wb.wb_data;
+        end else if (mem_wb.rf_w_en && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs1)) begin
+            rf_rdata1_with_forwarding_considered = mem_wb.wb_data;
         end
 
-        if (ex_mem.rf_w_en && (ex_mem.rd == id_ex.rs2)) begin
-            data2_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
+        if (ex_mem.rf_w_en && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs2)) begin
+            rf_rdata2_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
                 : ex_mem.pc_plus_4;
-        end else if (mem_wb.rf_w_en && (mem_wb.rd == id_ex.rs2)) begin
-            data2_with_forwarding_considered = mem_wb.wb_data;
+        end else if (mem_wb.rf_w_en && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs2)) begin
+            rf_rdata2_with_forwarding_considered = mem_wb.wb_data;
         end
     end
 
     // alu_a: 0 -> data; 1 -> pc
     // alu_b: 0 -> data; 1 -> imm
-    assign alu_a = id_ex.alu_a_sel ? id_ex.pc : data1_with_forwarding_considered;
-    assign alu_b = id_ex.alu_b_sel ? id_ex.imm : data2_with_forwarding_considered;
+    assign alu_a = id_ex.alu_a_sel ? id_ex.pc : rf_rdata1_with_forwarding_considered;
+    assign alu_b = id_ex.alu_b_sel ? id_ex.imm : rf_rdata2_with_forwarding_considered;
 
     alu u_alu (
         .a(alu_a),
@@ -270,23 +256,24 @@ module cpu_top (
 
     // br
     branch_comp u_branch_comp (
-        .a(id_ex.rf_rdata1),
-        .b(id_ex.rf_rdata2),
+        .a(rf_rdata1_with_forwarding_considered),
+        .b(rf_rdata2_with_forwarding_considered),
         .br_eq(br_eq)
     );
 
+    assign branch_taken = (id_ex.pc_sel == 2'b01) && br_eq;
+
     // flush
-    assign if_id_flush = br_eq;
-    assign id_ex_flush = br_eq;
+    assign if_id_flush = branch_taken;
+    assign id_ex_flush = branch_taken || load_use_hazard;
 
     // 传递
     always_comb begin
-        ex_mem_next.valid = id_ex.valid;
-        ex_mem_next.rf_rdata2 = id_ex.rf_rdata2;
+        ex_mem_next.rf_rdata2 = rf_rdata2_with_forwarding_considered;
         ex_mem_next.mem_req = id_ex.mem_req;
         ex_mem_next.mem_we = id_ex.mem_we;
         ex_mem_next.mem_sel = id_ex.mem_sel;
-        ex_mem_next.mem_load_is_unsigned = id_ex.mem_load_is_unsigned;
+        // ex_mem_next.mem_load_is_unsigned = id_ex.mem_load_is_unsigned;
         ex_mem_next.rd = id_ex.rd;
         ex_mem_next.pc_plus_4 = id_ex.pc_plus_4;
         ex_mem_next.rf_w_en = id_ex.rf_w_en;
@@ -294,19 +281,37 @@ module cpu_top (
     end
 
     // 4. MEM 阶段
+    // 内部状态
+    logic [31:0] mem_rdata_with_alignment_considered;
+
     assign mem_req = ex_mem.mem_req;
     assign mem_addr = ex_mem.alu_result;
-    assign mem_wdata = ex_mem.rf_rdata2;
+    assign mem_wdata = (ex_mem.mem_sel == 4'b0001)
+        ? (ex_mem.rf_rdata2 << (8 * ex_mem.alu_result[1:0]))
+        : ex_mem.rf_rdata2; // <- 只支持 LB 和 SB 的非对齐访问
     assign mem_we = ex_mem.mem_we;
-    assign mem_sel = ex_mem.mem_sel;
+    assign mem_sel = (ex_mem.mem_sel == 4'b0001)
+        ? (ex_mem.mem_sel << ex_mem.alu_result[1:0])
+        : ex_mem.mem_sel; // <- 只支持 LB 和 SB 的非对齐访问
 
     // wb_sel: 0 -> mem_rdata (符号扩展); 1 -> alu_result; 2 -> pc + 4
-    assign mem_wb_next.wb_data = (ex_mem.wb_sel == 2'b00) ? {{24{mem_rdata[7]}}, mem_rdata[7:0]} :
-        (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result : ex_mem.pc_plus_4;
+    always_comb begin
+        mem_rdata_with_alignment_considered = '0;
+        case (ex_mem.alu_result[1:0])
+            2'b00: mem_rdata_with_alignment_considered[7:0] = mem_rdata[7:0];
+            2'b01: mem_rdata_with_alignment_considered[7:0] = mem_rdata[15:8];
+            2'b10: mem_rdata_with_alignment_considered[7:0] = mem_rdata[23:16];
+            2'b11: mem_rdata_with_alignment_considered[7:0] = mem_rdata[31:24];
+            default:;
+        endcase
+    end
+
+    assign mem_wb_next.wb_data = (ex_mem.wb_sel == 2'b00) ?
+        {{24{mem_rdata_with_alignment_considered[7]}}, mem_rdata_with_alignment_considered[7:0]} :
+        (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result : ex_mem.pc_plus_4; // <- 只处理 signed 情况
 
     // 传递
     always_comb begin
-        mem_wb_next.valid = ex_mem.valid;
         mem_wb_next.rd = ex_mem.rd;
         mem_wb_next.rf_w_en = ex_mem.rf_w_en;
     end
@@ -334,8 +339,6 @@ module cpu_top (
 
             if (id_ex_flush) begin
                 id_ex <= '0; // flush
-            end else if (id_ex_stall) begin
-                id_ex <= id_ex; // stall
             end else begin
                 id_ex <= id_ex_next;
             end

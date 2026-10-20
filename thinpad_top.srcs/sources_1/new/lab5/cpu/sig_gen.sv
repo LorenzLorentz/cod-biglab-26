@@ -7,7 +7,7 @@ module sig_gen(
     output logic mem_req, // mem 请求使能
     output logic mem_we, // mem 写使能
     output logic [3:0] mem_sel, // mem 读写位宽, 0 表示 byte, 1 表示 word
-    output logic mem_load_is_unsigned, // mem load 的时候是否是signed
+    // output logic mem_load_is_unsigned, // mem load 的时候是否是signed
     output logic alu_a_sel, // alu_a 选择
     output logic alu_b_sel, // alu_b 选择
     output logic [1:0] alu_op, // alu_op 选择
@@ -58,7 +58,7 @@ module sig_gen(
                 alu_op = 0; // ADD
                 mem_req = 1;
                 mem_we = 0;
-                mem_sel = 4'b0001; // 一个字节
+                mem_sel = 4'b0001; // 一个字节 <- 只涉及 LB
                 rf_w_en = 1;
                 wb_sel = 0; // mem_rdata
             end
@@ -69,6 +69,7 @@ module sig_gen(
                 alu_b_sel = 1; // imm
                 alu_op = 0; // ADD
                 mem_req = 1;
+                mem_we = 1; // 写入
                 case (funct3)
                     3'b000:
                         mem_sel = 4'b0001; // 1 byte

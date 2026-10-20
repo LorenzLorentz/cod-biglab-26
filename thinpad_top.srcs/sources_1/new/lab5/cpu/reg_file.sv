@@ -15,8 +15,10 @@ module reg_file (
     logic [31:0] rf [32];
 
     // 组合逻辑: 读操作
-    assign rdata_a = (raddr_a == 5'd0) ? 32'h0 : rf[raddr_a];
-    assign rdata_b = (raddr_b == 5'd0) ? 32'h0 : rf[raddr_b];
+    assign rdata_a = (raddr_a == 5'd0) ? 32'b0 :
+        (we && waddr == raddr_a) ? wdata : rf[raddr_a];
+    assign rdata_b = (raddr_b == 5'd0) ? 32'h0 :
+        (we && waddr == raddr_b) ? wdata : rf[raddr_b];
 
     // 时序逻辑: 写操作
     always_ff @(posedge clk) begin
