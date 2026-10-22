@@ -43,7 +43,7 @@ module lab3_tb;
 
   initial begin
     // 在这里可以自定义测试输入序列，例如：
-    dip_sw = 32'h2;
+    dip_sw = 32'h1;
     touch_btn = 0;
     reset_btn = 0;
     push_btn = 0;
@@ -58,8 +58,10 @@ module lab3_tb;
     // 按下按钮，开始 SRAM Tester 的测试
     push_btn = 1;
 
-    // 等待一段时间，结束仿真
-    #10000 $finish;
+    // 等待 SRAM Tester 给出结果 (leds[0] = done，leds[1] = error), 结束仿真
+    wait (leds[0] || leds[1]);
+    $display("lab3_tb: seed=%08h %s at %0d ns", dip_sw, leds[1] ? "ERROR" : "done", $time);
+    #1000 $finish;
   end
 
   // 待测试用户设计

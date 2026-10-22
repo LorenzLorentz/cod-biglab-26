@@ -43,14 +43,13 @@ module sram_controller #(
     assign sram_data_i = sram_data;
 
     // 状态定义
-    typedef enum logic [2:0] { // 共7个状态, 3位
+    typedef enum logic [2:0] { // 共6个状态, 3位
         ST_IDLE = 3'b000,
         ST_READ = 3'b001,
         ST_READ_2 = 3'b010,
         ST_WRITE = 3'b011,
         ST_WRITE_2 = 3'b100,
-        ST_WRITE_3 = 3'b101,
-        ST_DONE = 3'b110
+        ST_WRITE_3 = 3'b101
     } state_t;
 
     state_t state;
