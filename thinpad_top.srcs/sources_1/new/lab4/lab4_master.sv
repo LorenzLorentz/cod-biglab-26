@@ -164,6 +164,7 @@ module lab4_master #(
             wb_adr_o <= '0;
             wb_dat_o <= '0;
             wb_sel_o <= '0;
+            wb_we_o <= '0;
         end else begin
             case (state)
                 ST_IDLE: begin
@@ -172,7 +173,7 @@ module lab4_master #(
                     wb_stb_o <= 1'b0;
 
                     cnt <= 4'b0;
-                    base_addr_reg <= base_addr_i;
+                    base_addr_reg <= base_addr_i & ~32'h3; // 对齐到4字节
                 end
 
                 // 读

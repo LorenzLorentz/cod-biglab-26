@@ -41,9 +41,17 @@ module lab4_tb;
   parameter BASE_RAM_INIT_FILE = "/tmp/main.bin"; // BaseRAM 初始化文件，请修改为实际的绝对路径
   parameter EXT_RAM_INIT_FILE = "/tmp/eram.bin";  // ExtRAM 初始化文件，请修改为实际的绝对路径
 
+  // 串口发送的 10 个随机字节（固定下来，含 0x00 / 0xff 两个边界值），以及 FPGA 回显的字节
+  reg [7:0] sent[0:9] = '{8'h3a, 8'h00, 8'hff, 8'h5c, 8'h81, 8'h12, 8'he7, 8'h40, 8'h9d, 8'h7b};
+  reg [7:0] echoed[$];
+  always @(posedge uart.rxd_data_ready) echoed.push_back(uart.rxd_data);
+
   initial begin
+    integer errors;
+    reg [7:0] sram_byte;
+
     // 在这里可以自定义测试输入序列，例如：
-    dip_sw = 32'h2;
+    dip_sw = 32'h8000_1000;  // 起始地址 Addr：BaseRAM 的第 0x1000 字节
     touch_btn = 0;
     reset_btn = 0;
     push_btn = 0;
@@ -53,23 +61,30 @@ module lab4_tb;
     #100;
     reset_btn = 0;
 
-    // TODO: 根据实验的操作要求，自定义下面的输入序列
-    for (integer i = 0; i < 20; i = i + 1) begin
-      #100;  // 等待 100ns
-      push_btn = 1;  // 按下 push_btn 按钮
-      #100;  // 等待 100ns
-      push_btn = 0;  // 松开 push_btn 按钮
+    // 等待复位结束，lab4_master 在复位结束时记下 dip_sw
+    wait (dut.sys_rst == 1'b0);
+    #2000;
+
+    // 模拟 PC 通过串口，向 FPGA 依次发送 10 个字节
+    for (integer i = 0; i < 10; i = i + 1) begin
+      uart.pc_send_byte(sent[i]);
     end
 
-    // 模拟 PC 通过串口，向 FPGA 发送字符
-    uart.pc_send_byte(8'h32); // ASCII '2'
-    #10000;
-    uart.pc_send_byte(8'h33); // ASCII '3'
+    // PC 接收到数据后，会在仿真窗口中打印出数据；等 10 个回显都收到
+    wait (echoed.size() == 10);
+    #2000;
 
-    // PC 接收到数据后，会在仿真窗口中打印出数据
-
-    // 等待一段时间，结束仿真
-    #10000 $finish;
+    // 比较回显和 SRAM 中的数据：第 i 个字节应在 Addr + 4i 的最低 8 位
+    errors = 0;
+    for (integer i = 0; i < 10; i = i + 1) begin
+      sram_byte = base1.mem_array0[dip_sw[21:2] + i];
+      $display("byte %0d: sent %02x, echoed %02x, SRAM[%08h] = %02x", i, sent[i], echoed[i], dip_sw + 4 * i,
+               sram_byte);
+      if (echoed[i] !== sent[i] || sram_byte !== sent[i]) errors = errors + 1;
+    end
+    if (errors == 0) $display("lab4_tb: PASS at %0d ns", $time);
+    else $display("lab4_tb: FAIL, %0d errors", errors);
+    $finish;
   end
 
   // 待测试用户设计
