@@ -38,11 +38,11 @@ module wb_master (
 
     // 返回锁存
     logic [31:0] inst_rdata_a;
-    logic inst_wb_ack_a;
-    logic inst_wb_err_a;
+    logic inst_ack_a;
+    logic inst_err_a;
     logic [31:0] mem_rdata_a;
-    logic mem_wb_ack_a;
-    logic mem_wb_err_a;
+    logic mem_ack_a;
+    logic mem_err_a;
 
     // 状态定义
     // CPU 侧的 req 表示持续需求；Wishbone 的 cyc/stb 表示一笔正在
@@ -59,20 +59,18 @@ module wb_master (
     // ready 信号
     always_comb begin
         inst_ready_o = !inst_req_i || (inst_state == REQ_DONE);
-        data_ready_o = !data_req_i || (data_state == REQ_DONE);
+        mem_ready_o = !mem_req_i || (mem_state == REQ_DONE);
     end
 
-    wire is_cpu_step_done = inst_ready_o && data_ready_o;
+    wire is_cpu_step_done = inst_ready_o && mem_ready_o;
 
     // 状态机
     // inst
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
             inst_state <= REQ_IDLE;
-            data_state <= REQ_IDLE;
         end else if (is_cpu_step_done) begin
             inst_state <= REQ_IDLE;
-            data_state <= REQ_IDLE;
         end else begin
             case (inst_state)
                 REQ_IDLE: begin
@@ -83,10 +81,10 @@ module wb_master (
                 end
 
                 REQ_BUSY: begin
-                    if (inst_wb_ack) begin
-                        inst_rdata_o <= inst_wb_rdata;
+                    if (inst_ack_a) begin
+                        inst_rdata_o <= inst_rdata_a;
                         inst_state <= REQ_DONE;
-                    end else if (inst_wb_err) begin
+                    end else if (inst_err_a) begin
                         inst_rdata_o <= 32'b0;
                         inst_state <= REQ_DONE;
                     end
@@ -109,15 +107,17 @@ module wb_master (
                 REQ_IDLE: begin
                     if (mem_req_i) begin
                         mem_addr_q <= mem_addr_i;
+                        mem_wdata_q <= mem_wdata_i;
+                        mem_sel_q <= mem_sel_i;
                         mem_state <= REQ_BUSY;
                     end
                 end
 
                 REQ_BUSY: begin
-                    if (mem_wb_ack) begin
+                    if (mem_ack_a) begin
                         mem_rdata_o <= mem_rdata_a;
                         mem_state <= REQ_DONE;
-                    end else if (mem_wb_err) begin
+                    end else if (mem_err_a) begin
                         mem_rdata_o <= 32'b0;
                         mem_state <= REQ_DONE;
                     end
