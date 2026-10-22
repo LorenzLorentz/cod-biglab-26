@@ -84,7 +84,7 @@ module sram_controller #(
             end
 
             ST_READ_2: begin
-                next_state = ST_DONE;
+                next_state = ST_IDLE;
             end
 
             ST_WRITE: begin
@@ -96,10 +96,6 @@ module sram_controller #(
             end
 
             ST_WRITE_3: begin
-                next_state = ST_DONE;
-            end
-
-            ST_DONE: begin
                 next_state = ST_IDLE;
             end
 
@@ -148,7 +144,14 @@ module sram_controller #(
                 end
 
                 ST_READ_2: begin
-                    // wb_dat_o <= sram_data_i;
+                    // 返回结果
+                    wb_dat_o <= sram_data_i;
+                    wb_ack_o <= 1'b1;
+
+                    // 结束
+                    sram_data_t <= 1'b1;
+                    sram_ce_n <= 1'b1;
+                    sram_oe_n <= 1'b1;
                 end
 
                 ST_WRITE: begin
@@ -169,21 +172,17 @@ module sram_controller #(
                 end
 
                 ST_WRITE_3: begin
-                    sram_we_n <= 1'b1;
-                end
+                    // 返回结果
+                    wb_ack_o <= 1'b1;
 
-                ST_DONE: begin
-                    if (state == ST_READ_2) begin
-                        wb_dat_o <= sram_data_i;
-                    end
-
+                    // 结束
                     sram_data_t <= 1'b1;
+                    sram_we_n <= 1'b1;
                     sram_ce_n <= 1'b1;
                     sram_oe_n <= 1'b1;
-                    wb_ack_o <= 1'b1;
                 end
 
-                default: ;
+                default:;
             endcase
         end
     end
