@@ -1,4 +1,4 @@
-module reg_file (
+module cpu_reg_file (
     input logic clk,
     input logic rst,
 

@@ -185,7 +185,7 @@ module cpu_top (
     );
 
     // rf & 5. WB 阶段
-    reg_file u_reg_file (
+    cpu_reg_file u_reg_file (
         .clk(clk),
         .rst(rst),
         .raddr_a(rs1),
@@ -247,7 +247,7 @@ module cpu_top (
     assign alu_a = id_ex.alu_a_sel ? id_ex.pc : rf_rdata1_with_forwarding_considered;
     assign alu_b = id_ex.alu_b_sel ? id_ex.imm : rf_rdata2_with_forwarding_considered;
 
-    alu u_alu (
+    cpu_alu u_alu (
         .a(alu_a),
         .b(alu_b),
         .op(id_ex.alu_op),
