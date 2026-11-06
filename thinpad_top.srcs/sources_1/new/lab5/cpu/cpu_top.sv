@@ -317,12 +317,12 @@ module cpu_top (
     end
 
     // 状态更新
+    // nop: addi x0, x0, 0
+    // verilog_lint: waive-start parameter-name-style
+    localparam if_id_t IF_ID_NOP = '{inst: 32'h0000_0013, pc: '0, pc_plus_4: '0};
+    // verilog_lint: waive-stop parameter-name-style
     always_ff @(posedge clk) begin
         if (rst) begin
-            // nop: addi x0, x0, 0
-            // verilog_lint: waive-start parameter-name-style
-            localparam if_id_t IF_ID_NOP = '{inst: 32'h0000_0013, pc: '0, pc_plus_4: '0};
-            // verilog_lint: waive-stop parameter-name-style
             if_id <= IF_ID_NOP;
             id_ex <= '0;
             ex_mem <= '0;
@@ -334,7 +334,7 @@ module cpu_top (
             mem_wb <= mem_wb;
         end else begin
             if (if_id_flush) begin
-                if_id <= '0; // flush
+                if_id <= IF_ID_NOP; // flush
             end else if (if_id_stall) begin
                 if_id <= if_id; // stall
             end else begin
