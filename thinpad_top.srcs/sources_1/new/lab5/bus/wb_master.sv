@@ -108,6 +108,7 @@ module wb_master (
                     if (mem_req_i) begin
                         mem_addr_q <= mem_addr_i;
                         mem_wdata_q <= mem_wdata_i;
+                        mem_we_q <= mem_we_i;
                         mem_sel_q <= mem_sel_i;
                         mem_state <= REQ_BUSY;
                     end
