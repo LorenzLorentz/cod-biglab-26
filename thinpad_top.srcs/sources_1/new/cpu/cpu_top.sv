@@ -44,7 +44,10 @@ module cpu_top (
         logic [31:0] imm; // sel = 1
         logic alu_b_sel; // alu_b 选择
         // alu_op
-        logic [1:0] alu_op;
+        logic [3:0] alu_op;
+        // 操作数是否真的被使用
+        logic use_rs1;
+        logic use_rs2;
         // bc op
         // logic [1:0] bc_op; // 暂时不需要
         // pc_sel
@@ -147,6 +150,8 @@ module cpu_top (
     logic [2:0] funct3;
     logic [6:0] funct7;
     logic [2:0] imm_type;
+    logic use_rs1;
+    logic use_rs2;
 
     // inst decode
     inst_decoder u_inst_decoder (
@@ -165,6 +170,7 @@ module cpu_top (
         .opcode(opcode),
         .funct3(funct3),
         .funct7(funct7),
+        .funct5(rs2),
         .rf_w_en(id_ex_next.rf_w_en),
         .mem_req(id_ex_next.mem_req),
         .mem_we(id_ex_next.mem_we),
@@ -174,7 +180,9 @@ module cpu_top (
         .alu_b_sel(id_ex_next.alu_b_sel),
         .alu_op(id_ex_next.alu_op),
         .pc_sel(id_ex_next.pc_sel),
-        .wb_sel(id_ex_next.wb_sel)
+        .wb_sel(id_ex_next.wb_sel),
+        .use_rs1(use_rs1),
+        .use_rs2(use_rs2)
     );
 
     // imm gen
@@ -200,7 +208,8 @@ module cpu_top (
     // stall
     logic load_use_hazard;
     assign load_use_hazard = (id_ex.mem_req && !id_ex.mem_we && id_ex.rf_w_en)
-        && (id_ex.rd != 5'b0) && ((id_ex.rd == rs1) || (id_ex.rd == rs2));
+        && (id_ex.rd != 5'b0)
+        && ((use_rs1 && (id_ex.rd == rs1)) || (use_rs2 && (id_ex.rd == rs2)));
     assign pc_stall = load_use_hazard;
     assign if_id_stall = pc_stall;
 
@@ -208,6 +217,8 @@ module cpu_top (
     always_comb begin
         id_ex_next.rs1 = rs1;
         id_ex_next.rs2 = rs2;
+        id_ex_next.use_rs1 = use_rs1;
+        id_ex_next.use_rs2 = use_rs2;
         id_ex_next.pc = if_id.pc;
         id_ex_next.pc_plus_4 = if_id.pc_plus_4;
     end
@@ -227,17 +238,21 @@ module cpu_top (
         rf_rdata1_with_forwarding_considered = id_ex.rf_rdata1;
         rf_rdata2_with_forwarding_considered = id_ex.rf_rdata2;
 
-        if (ex_mem.rf_w_en && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs1)) begin // 要写回但还没有
+        if (id_ex.use_rs1 && ex_mem.rf_w_en
+            && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs1)) begin // 要写回但还没有
             rf_rdata1_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
                 : ex_mem.pc_plus_4;
-        end else if (mem_wb.rf_w_en && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs1)) begin
+        end else if (id_ex.use_rs1 && mem_wb.rf_w_en
+            && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs1)) begin
             rf_rdata1_with_forwarding_considered = mem_wb.wb_data;
         end
 
-        if (ex_mem.rf_w_en && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs2)) begin
+        if (id_ex.use_rs2 && ex_mem.rf_w_en
+            && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs2)) begin
             rf_rdata2_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
                 : ex_mem.pc_plus_4;
-        end else if (mem_wb.rf_w_en && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs2)) begin
+        end else if (id_ex.use_rs2 && mem_wb.rf_w_en
+            && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs2)) begin
             rf_rdata2_with_forwarding_considered = mem_wb.wb_data;
         end
     end
