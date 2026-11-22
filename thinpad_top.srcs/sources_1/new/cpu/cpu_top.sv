@@ -49,7 +49,8 @@ module cpu_top (
         logic use_rs1;
         logic use_rs2;
         // bc op
-        // logic [1:0] bc_op; // 暂时不需要
+        logic [2:0] br_type; // 条件分支类型, 0 表示不是条件分支
+        logic is_jalr; // JALR 的目标地址要清最低位
         // pc_sel
         logic [1:0] pc_sel;
 
@@ -119,8 +120,8 @@ module cpu_top (
     logic [31:0] pc_next;
 
     assign pc_plus_4 = pc + 4;
-    // pc_sel: 0 -> pc_plus_4; 1 -> alu_result (pc + offset)
-    assign pc_next = branch_taken ? ex_mem_next.alu_result : pc_plus_4;
+    // pc_sel: 0 -> pc_plus_4; 1 -> redirect_target
+    assign pc_next = redirect_taken ? redirect_target : pc_plus_4;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -180,6 +181,8 @@ module cpu_top (
         .alu_b_sel(id_ex_next.alu_b_sel),
         .alu_op(id_ex_next.alu_op),
         .pc_sel(id_ex_next.pc_sel),
+        .br_type(id_ex_next.br_type),
+        .is_jalr(id_ex_next.is_jalr),
         .wb_sel(id_ex_next.wb_sel),
         .use_rs1(use_rs1),
         .use_rs2(use_rs2)
@@ -228,7 +231,11 @@ module cpu_top (
     logic [31:0] alu_a;
     logic [31:0] alu_b;
     logic br_eq;
-    logic branch_taken;
+    logic br_lt;
+    logic br_ltu;
+    logic branch_cond;
+    logic redirect_taken;
+    logic [31:0] redirect_target;
     logic [31:0] rf_rdata1_with_forwarding_considered;
     logic [31:0] rf_rdata2_with_forwarding_considered;
 
@@ -279,14 +286,33 @@ module cpu_top (
     branch_comp u_branch_comp (
         .a(rf_rdata1_with_forwarding_considered),
         .b(rf_rdata2_with_forwarding_considered),
-        .br_eq(br_eq)
+        .br_eq(br_eq),
+        .br_lt(br_lt),
+        .br_ltu(br_ltu)
     );
 
-    assign branch_taken = (id_ex.pc_sel == 2'b01) && br_eq;
+    // br_type: 0 -> 不是条件分支; branch_cond: 1 -> 条件分支跳转
+    always_comb begin
+        case (id_ex.br_type)
+            3'd0: branch_cond = 1'b0;
+            3'd1: branch_cond = br_eq; // BEQ
+            3'd2: branch_cond = !br_eq; // BNE
+            3'd3: branch_cond = br_lt; // BLT
+            3'd4: branch_cond = !br_lt; // BGE
+            3'd5: branch_cond = br_ltu; // BLTU
+            3'd6: branch_cond = !br_ltu; // BGEU
+            default: branch_cond = 1'b0;
+        endcase
+    end
+
+    assign redirect_taken = (id_ex.pc_sel == 2'b01) && ((id_ex.br_type == 3'd0) || branch_cond);
+    assign redirect_target = id_ex.is_jalr
+        ? {ex_mem_next.alu_result[31:1], 1'b0}
+        : ex_mem_next.alu_result;
 
     // flush
-    assign if_id_flush = branch_taken;
-    assign id_ex_flush = branch_taken || load_use_hazard;
+    assign if_id_flush = redirect_taken;
+    assign id_ex_flush = redirect_taken || load_use_hazard;
 
     // 传递
     always_comb begin

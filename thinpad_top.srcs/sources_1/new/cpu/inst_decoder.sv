@@ -28,7 +28,8 @@ module inst_decoder(
         case (opcode[6:2])
             // I-type
             5'b00100,
-            5'b00000:
+            5'b00000,
+            5'b11001:
                 imm_type = IMM_I;
 
             // S-type
@@ -43,6 +44,10 @@ module inst_decoder(
             5'b01101,
             5'b00101:
                 imm_type = IMM_U;
+
+            // J-type:
+            5'b11011:
+                imm_type = IMM_J;
 
             default:
                 imm_type = IMM_X;
