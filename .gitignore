@@ -20,3 +20,4 @@ sim/
 flow.env
 __pycache__/
 Makefile
+test/
