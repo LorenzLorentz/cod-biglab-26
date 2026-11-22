@@ -240,8 +240,11 @@ module cpu_top (
 
         if (id_ex.use_rs1 && ex_mem.rf_w_en
             && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs1)) begin // 要写回但还没有
-            rf_rdata1_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
-                : ex_mem.pc_plus_4;
+            case (ex_mem.wb_sel)
+                2'b01: rf_rdata1_with_forwarding_considered = ex_mem.alu_result;
+                2'b10: rf_rdata1_with_forwarding_considered = ex_mem.pc_plus_4;
+                default:; // load: MEM 级才拿到数据, 紧跟的指令已被 load-use 暂停
+            endcase
         end else if (id_ex.use_rs1 && mem_wb.rf_w_en
             && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs1)) begin
             rf_rdata1_with_forwarding_considered = mem_wb.wb_data;
@@ -249,8 +252,11 @@ module cpu_top (
 
         if (id_ex.use_rs2 && ex_mem.rf_w_en
             && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs2)) begin
-            rf_rdata2_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
-                : ex_mem.pc_plus_4;
+            case (ex_mem.wb_sel)
+                2'b01: rf_rdata2_with_forwarding_considered = ex_mem.alu_result;
+                2'b10: rf_rdata2_with_forwarding_considered = ex_mem.pc_plus_4;
+                default:; // load: MEM 级才拿到数据, 紧跟的指令已被 load-use 暂停
+            endcase
         end else if (id_ex.use_rs2 && mem_wb.rf_w_en
             && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs2)) begin
             rf_rdata2_with_forwarding_considered = mem_wb.wb_data;
@@ -300,7 +306,11 @@ module cpu_top (
     logic [31:0] mem_rdata_with_alignment_considered;
 
     assign mem_req = ex_mem.mem_req;
-    assign mem_addr = ex_mem.alu_result;
+    // LW/SW 必须 4 字节对齐: 低 2 位不参与寻址
+    // TODO: 非对齐访问的异常
+    assign mem_addr = (ex_mem.mem_sel == 4'b1111)
+        ? {ex_mem.alu_result[31:2], 2'b00}
+        : ex_mem.alu_result; // <- 只支持 LB 和 SB 的非对齐访问
     assign mem_wdata = (ex_mem.mem_sel == 4'b0001)
         ? (ex_mem.rf_rdata2 << (8 * ex_mem.alu_result[1:0]))
         : ex_mem.rf_rdata2; // <- 只支持 LB 和 SB 的非对齐访问
@@ -309,7 +319,8 @@ module cpu_top (
         ? (ex_mem.mem_sel << ex_mem.alu_result[1:0])
         : ex_mem.mem_sel; // <- 只支持 LB 和 SB 的非对齐访问
 
-    // wb_sel: 0 -> mem_rdata (符号扩展); 1 -> alu_result; 2 -> pc + 4
+    // wb_sel: 0 -> mem_rdata (LB 符号扩展 / LW 整字); 1 -> alu_result; 2 -> pc + 4
+    // LB 情形, 处理对齐
     always_comb begin
         mem_rdata_with_alignment_considered = '0;
         case (ex_mem.alu_result[1:0])
@@ -322,8 +333,9 @@ module cpu_top (
     end
 
     assign mem_wb_next.wb_data = (ex_mem.wb_sel == 2'b00) ?
-        {{24{mem_rdata_with_alignment_considered[7]}}, mem_rdata_with_alignment_considered[7:0]} :
-        (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result : ex_mem.pc_plus_4; // <- 只处理 signed 情况
+        ((ex_mem.mem_sel == 4'b1111) ? mem_rdata : // 1. 4 Bytes; 2. 1 Byte
+        {{24{mem_rdata_with_alignment_considered[7]}}, mem_rdata_with_alignment_considered[7:0]}) :
+        (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result : ex_mem.pc_plus_4;
 
     // 传递
     always_comb begin

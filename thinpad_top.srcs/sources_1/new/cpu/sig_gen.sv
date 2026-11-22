@@ -86,20 +86,29 @@ module sig_gen(
                 endcase
             end
 
-            5'b00000: begin// LB
+            5'b00000: begin // LB, LW
                 alu_a_sel = 0; // reg_rdata1
                 alu_b_sel = 1; // imm
                 alu_op = 0; // ADD
                 use_rs1 = 1;
                 mem_req = 1;
                 mem_we = 0;
-                mem_sel = 4'b0001; // 一个字节 <- 只涉及 LB
                 rf_w_en = 1;
                 wb_sel = 0; // mem_rdata
+                case (funct3)
+                    3'b000:
+                        mem_sel = 4'b0001; // 1 byte
+                    3'b010:
+                        mem_sel = 4'b1111; // 1 word
+                    default: begin
+                        mem_req = 0;
+                        rf_w_en = 0;
+                    end
+                endcase
             end
 
             // S-type
-            5'b01000: begin// SB, SW
+            5'b01000: begin // SB, SW
                 alu_a_sel = 0; // reg_rdata1
                 alu_b_sel = 1; // imm
                 alu_op = 0; // ADD
