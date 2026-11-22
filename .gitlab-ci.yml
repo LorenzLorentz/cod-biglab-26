@@ -1,5 +1,7 @@
 variables:
-  GIT_SUBMODULE_STRATEGY: recursive
+  # 课程 CI 只跑 Vivado bitstream + linter，不需要 tools/ 子模块；
+  # tools 在个人 GitHub 上，CI runner 不一定有权限，所以不初始化。
+  GIT_SUBMODULE_STRATEGY: none
 
 stages:
   - build

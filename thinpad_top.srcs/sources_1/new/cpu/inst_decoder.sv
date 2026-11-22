@@ -9,12 +9,6 @@ module inst_decoder(
     output logic [2:0] funct3,
     output logic [6:0] funct7
 );
-    // 只需要支持
-    // ADD, ADDI, ANDI
-    // LB, LW, SW
-    // LUI
-    // BEQ
-
     assign opcode = inst[6:0]; // 7位
     assign rd = inst[11:7]; // 5位
     assign rs1 = inst[19:15]; // 5位
@@ -34,7 +28,8 @@ module inst_decoder(
         case (opcode[6:2])
             // I-type
             5'b00100,
-            5'b00000:
+            5'b00000,
+            5'b11001:
                 imm_type = IMM_I;
 
             // S-type
@@ -46,8 +41,13 @@ module inst_decoder(
                 imm_type = IMM_B;
 
             // U-type:
-            5'b01101:
+            5'b01101,
+            5'b00101:
                 imm_type = IMM_U;
+
+            // J-type:
+            5'b11011:
+                imm_type = IMM_J;
 
             default:
                 imm_type = IMM_X;

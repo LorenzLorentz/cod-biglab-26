@@ -44,9 +44,13 @@ module cpu_top (
         logic [31:0] imm; // sel = 1
         logic alu_b_sel; // alu_b 选择
         // alu_op
-        logic [1:0] alu_op;
+        logic [3:0] alu_op;
+        // 操作数是否真的被使用
+        logic use_rs1;
+        logic use_rs2;
         // bc op
-        // logic [1:0] bc_op; // 暂时不需要
+        logic [2:0] br_type; // 条件分支类型, 0 表示不是条件分支
+        logic is_jalr; // JALR 的目标地址要清最低位
         // pc_sel
         logic [1:0] pc_sel;
 
@@ -116,8 +120,8 @@ module cpu_top (
     logic [31:0] pc_next;
 
     assign pc_plus_4 = pc + 4;
-    // pc_sel: 0 -> pc_plus_4; 1 -> alu_result (pc + offset)
-    assign pc_next = branch_taken ? ex_mem_next.alu_result : pc_plus_4;
+    // pc_sel: 0 -> pc_plus_4; 1 -> redirect_target
+    assign pc_next = redirect_taken ? redirect_target : pc_plus_4;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -147,6 +151,8 @@ module cpu_top (
     logic [2:0] funct3;
     logic [6:0] funct7;
     logic [2:0] imm_type;
+    logic use_rs1;
+    logic use_rs2;
 
     // inst decode
     inst_decoder u_inst_decoder (
@@ -165,6 +171,7 @@ module cpu_top (
         .opcode(opcode),
         .funct3(funct3),
         .funct7(funct7),
+        .funct5(rs2),
         .rf_w_en(id_ex_next.rf_w_en),
         .mem_req(id_ex_next.mem_req),
         .mem_we(id_ex_next.mem_we),
@@ -174,7 +181,11 @@ module cpu_top (
         .alu_b_sel(id_ex_next.alu_b_sel),
         .alu_op(id_ex_next.alu_op),
         .pc_sel(id_ex_next.pc_sel),
-        .wb_sel(id_ex_next.wb_sel)
+        .br_type(id_ex_next.br_type),
+        .is_jalr(id_ex_next.is_jalr),
+        .wb_sel(id_ex_next.wb_sel),
+        .use_rs1(use_rs1),
+        .use_rs2(use_rs2)
     );
 
     // imm gen
@@ -200,7 +211,8 @@ module cpu_top (
     // stall
     logic load_use_hazard;
     assign load_use_hazard = (id_ex.mem_req && !id_ex.mem_we && id_ex.rf_w_en)
-        && (id_ex.rd != 5'b0) && ((id_ex.rd == rs1) || (id_ex.rd == rs2));
+        && (id_ex.rd != 5'b0)
+        && ((use_rs1 && (id_ex.rd == rs1)) || (use_rs2 && (id_ex.rd == rs2)));
     assign pc_stall = load_use_hazard;
     assign if_id_stall = pc_stall;
 
@@ -208,6 +220,8 @@ module cpu_top (
     always_comb begin
         id_ex_next.rs1 = rs1;
         id_ex_next.rs2 = rs2;
+        id_ex_next.use_rs1 = use_rs1;
+        id_ex_next.use_rs2 = use_rs2;
         id_ex_next.pc = if_id.pc;
         id_ex_next.pc_plus_4 = if_id.pc_plus_4;
     end
@@ -217,7 +231,11 @@ module cpu_top (
     logic [31:0] alu_a;
     logic [31:0] alu_b;
     logic br_eq;
-    logic branch_taken;
+    logic br_lt;
+    logic br_ltu;
+    logic branch_cond;
+    logic redirect_taken;
+    logic [31:0] redirect_target;
     logic [31:0] rf_rdata1_with_forwarding_considered;
     logic [31:0] rf_rdata2_with_forwarding_considered;
 
@@ -227,17 +245,27 @@ module cpu_top (
         rf_rdata1_with_forwarding_considered = id_ex.rf_rdata1;
         rf_rdata2_with_forwarding_considered = id_ex.rf_rdata2;
 
-        if (ex_mem.rf_w_en && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs1)) begin // 要写回但还没有
-            rf_rdata1_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
-                : ex_mem.pc_plus_4;
-        end else if (mem_wb.rf_w_en && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs1)) begin
+        if (id_ex.use_rs1 && ex_mem.rf_w_en
+            && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs1)) begin // 要写回但还没有
+            case (ex_mem.wb_sel)
+                2'b01: rf_rdata1_with_forwarding_considered = ex_mem.alu_result;
+                2'b10: rf_rdata1_with_forwarding_considered = ex_mem.pc_plus_4;
+                default:; // load: MEM 级才拿到数据, 紧跟的指令已被 load-use 暂停
+            endcase
+        end else if (id_ex.use_rs1 && mem_wb.rf_w_en
+            && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs1)) begin
             rf_rdata1_with_forwarding_considered = mem_wb.wb_data;
         end
 
-        if (ex_mem.rf_w_en && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs2)) begin
-            rf_rdata2_with_forwarding_considered = (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result
-                : ex_mem.pc_plus_4;
-        end else if (mem_wb.rf_w_en && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs2)) begin
+        if (id_ex.use_rs2 && ex_mem.rf_w_en
+            && (ex_mem.rd != 5'b0) && (ex_mem.rd == id_ex.rs2)) begin
+            case (ex_mem.wb_sel)
+                2'b01: rf_rdata2_with_forwarding_considered = ex_mem.alu_result;
+                2'b10: rf_rdata2_with_forwarding_considered = ex_mem.pc_plus_4;
+                default:; // load: MEM 级才拿到数据, 紧跟的指令已被 load-use 暂停
+            endcase
+        end else if (id_ex.use_rs2 && mem_wb.rf_w_en
+            && (mem_wb.rd != 5'b0) && (mem_wb.rd == id_ex.rs2)) begin
             rf_rdata2_with_forwarding_considered = mem_wb.wb_data;
         end
     end
@@ -258,14 +286,33 @@ module cpu_top (
     branch_comp u_branch_comp (
         .a(rf_rdata1_with_forwarding_considered),
         .b(rf_rdata2_with_forwarding_considered),
-        .br_eq(br_eq)
+        .br_eq(br_eq),
+        .br_lt(br_lt),
+        .br_ltu(br_ltu)
     );
 
-    assign branch_taken = (id_ex.pc_sel == 2'b01) && br_eq;
+    // br_type: 0 -> 不是条件分支; branch_cond: 1 -> 条件分支跳转
+    always_comb begin
+        case (id_ex.br_type)
+            3'd0: branch_cond = 1'b0;
+            3'd1: branch_cond = br_eq; // BEQ
+            3'd2: branch_cond = !br_eq; // BNE
+            3'd3: branch_cond = br_lt; // BLT
+            3'd4: branch_cond = !br_lt; // BGE
+            3'd5: branch_cond = br_ltu; // BLTU
+            3'd6: branch_cond = !br_ltu; // BGEU
+            default: branch_cond = 1'b0;
+        endcase
+    end
+
+    assign redirect_taken = (id_ex.pc_sel == 2'b01) && ((id_ex.br_type == 3'd0) || branch_cond);
+    assign redirect_target = id_ex.is_jalr
+        ? {ex_mem_next.alu_result[31:1], 1'b0}
+        : ex_mem_next.alu_result;
 
     // flush
-    assign if_id_flush = branch_taken;
-    assign id_ex_flush = branch_taken || load_use_hazard;
+    assign if_id_flush = redirect_taken;
+    assign id_ex_flush = redirect_taken || load_use_hazard;
 
     // 传递
     always_comb begin
@@ -285,7 +332,11 @@ module cpu_top (
     logic [31:0] mem_rdata_with_alignment_considered;
 
     assign mem_req = ex_mem.mem_req;
-    assign mem_addr = ex_mem.alu_result;
+    // LW/SW 必须 4 字节对齐: 低 2 位不参与寻址
+    // TODO: 非对齐访问的异常
+    assign mem_addr = (ex_mem.mem_sel == 4'b1111)
+        ? {ex_mem.alu_result[31:2], 2'b00}
+        : ex_mem.alu_result; // <- 只支持 LB 和 SB 的非对齐访问
     assign mem_wdata = (ex_mem.mem_sel == 4'b0001)
         ? (ex_mem.rf_rdata2 << (8 * ex_mem.alu_result[1:0]))
         : ex_mem.rf_rdata2; // <- 只支持 LB 和 SB 的非对齐访问
@@ -294,7 +345,8 @@ module cpu_top (
         ? (ex_mem.mem_sel << ex_mem.alu_result[1:0])
         : ex_mem.mem_sel; // <- 只支持 LB 和 SB 的非对齐访问
 
-    // wb_sel: 0 -> mem_rdata (符号扩展); 1 -> alu_result; 2 -> pc + 4
+    // wb_sel: 0 -> mem_rdata (LB 符号扩展 / LW 整字); 1 -> alu_result; 2 -> pc + 4
+    // LB 情形, 处理对齐
     always_comb begin
         mem_rdata_with_alignment_considered = '0;
         case (ex_mem.alu_result[1:0])
@@ -307,8 +359,9 @@ module cpu_top (
     end
 
     assign mem_wb_next.wb_data = (ex_mem.wb_sel == 2'b00) ?
-        {{24{mem_rdata_with_alignment_considered[7]}}, mem_rdata_with_alignment_considered[7:0]} :
-        (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result : ex_mem.pc_plus_4; // <- 只处理 signed 情况
+        ((ex_mem.mem_sel == 4'b1111) ? mem_rdata : // 1. 4 Bytes; 2. 1 Byte
+        {{24{mem_rdata_with_alignment_considered[7]}}, mem_rdata_with_alignment_considered[7:0]}) :
+        (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result : ex_mem.pc_plus_4;
 
     // 传递
     always_comb begin
