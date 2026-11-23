@@ -204,7 +204,16 @@ module thinpad_top (
     logic [3:0] wbs2_sel_o;
     logic wbs2_we_o;
 
-    wb_mux_3 wb_mux (
+    logic wbs3_cyc_o;
+    logic wbs3_stb_o;
+    logic wbs3_ack_i;
+    logic [31:0] wbs3_adr_o;
+    logic [31:0] wbs3_dat_o;
+    logic [31:0] wbs3_dat_i;
+    logic [3:0] wbs3_sel_o;
+    logic wbs3_we_o;
+
+    wb_mux_4 wb_mux (
         .clk(sys_clk),
         .rst(sys_rst),
 
@@ -266,7 +275,23 @@ module thinpad_top (
         .wbs2_ack_i(wbs2_ack_i),
         .wbs2_err_i('0),
         .wbs2_rty_i('0),
-        .wbs2_cyc_o(wbs2_cyc_o)
+        .wbs2_cyc_o(wbs2_cyc_o),
+
+        // Slave interface 3 (to NPU)
+        // Address range: 0x2000_0000 ~ 0x2000_FFFF
+        .wbs3_addr    (32'h2000_0000),
+        .wbs3_addr_msk(32'hFFFF_0000),
+
+        .wbs3_adr_o(wbs3_adr_o),
+        .wbs3_dat_i(wbs3_dat_i),
+        .wbs3_dat_o(wbs3_dat_o),
+        .wbs3_we_o (wbs3_we_o),
+        .wbs3_sel_o(wbs3_sel_o),
+        .wbs3_stb_o(wbs3_stb_o),
+        .wbs3_ack_i(wbs3_ack_i),
+        .wbs3_err_i('0),
+        .wbs3_rty_i('0),
+        .wbs3_cyc_o(wbs3_cyc_o)
     );
 
     /* =========== lab4 MUX end =========== */
@@ -345,6 +370,23 @@ module thinpad_top (
         // to UART pins
         .uart_txd_o(txd),
         .uart_rxd_i(rxd)
+    );
+
+    // NPU模块
+    npu_top u_npu (
+        .clk_i  (sys_clk),
+        .rst_i  (sys_rst),
+
+        .wb_adr_i(wbs3_adr_o),
+        .wb_dat_i(wbs3_dat_o),
+        .wb_dat_o(wbs3_dat_i),
+        .wb_we_i (wbs3_we_o),
+        .wb_sel_i(wbs3_sel_o),
+        .wb_stb_i(wbs3_stb_o),
+        .wb_ack_o(wbs3_ack_i),
+        .wb_cyc_i(wbs3_cyc_o),
+        .wb_err_o(),
+        .wb_rty_o()
     );
 
     /* =========== lab4 Slaves end =========== */
