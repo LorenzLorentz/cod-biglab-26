@@ -15,13 +15,16 @@ module cpu_top (
     input [31:0] mem_rdata,
     output logic mem_we,
     output logic [3:0] mem_sel,
-    input mem_ready
+    input mem_ready,
+
+    input logic timer_irq
 );
     // 流水线寄存器
     // IF -> ID
     typedef struct packed {
         // ID 需要
         logic [31:0] inst;
+        logic valid;
 
         // 后续需要
         logic [31:0] pc; // EX 需要
@@ -63,6 +66,14 @@ module cpu_top (
         logic [31:0] pc_plus_4; // WB 需要
         logic rf_w_en; // WB 需要
         logic [1:0] wb_sel; // WB 需要
+
+        logic [31:0] inst;
+        logic [1:0] csr_op;
+        logic csr_use_imm;
+        logic csr_w_en;
+        logic is_mret;
+        logic exc_valid;
+        logic [4:0] exc_cause;
     } id_ex_t;
 
     // EX -> MEM
@@ -83,6 +94,15 @@ module cpu_top (
         logic [31:0] pc_plus_4; // WB 需要
         logic rf_w_en; // WB 需要
         logic [1:0] wb_sel; // WB 需要
+
+        logic [31:0] pc;
+        logic [31:0] inst;
+        logic [1:0] csr_op;
+        logic csr_w_en;
+        logic [31:0] csr_wsrc;
+        logic is_mret;
+        logic exc_valid;
+        logic [4:0] exc_cause;
     } ex_mem_t;
 
     // MEM -> WB
@@ -95,6 +115,21 @@ module cpu_top (
         // 相关使能
         logic rf_w_en;
     } mem_wb_t;
+
+    typedef enum logic [1:0] {
+        PRIV_U = 2'b00,
+        PRIV_M = 2'b11
+    } priv_mode_t;
+
+    typedef enum logic [4:0] {
+        EXC_INST_MISALIGN = 5'd0,
+        EXC_ILLEGAL_INST = 5'd2,
+        EXC_BREAKPOINT = 5'd3,
+        EXC_LOAD_MISALIGN = 5'd4,
+        EXC_STORE_MISALIGN = 5'd6,
+        EXC_ECALL_U = 5'd8,
+        EXC_ECALL_M = 5'd11
+    } exc_cause_t;
 
     if_id_t if_id, if_id_next;
     id_ex_t id_ex, id_ex_next;
@@ -111,6 +146,13 @@ module cpu_top (
     // flush
     logic if_id_flush;
     logic id_ex_flush;
+    logic ex_mem_flush;
+
+    logic [1:0] priv_mode;
+    logic irq_valid;
+    logic [3:0] irq_cause;
+    logic mem_redirect_taken;
+    logic [31:0] mem_redirect_target;
 
     // 执行
     // 1. IF阶段
@@ -121,7 +163,8 @@ module cpu_top (
 
     assign pc_plus_4 = pc + 4;
     // pc_sel: 0 -> pc_plus_4; 1 -> redirect_target
-    assign pc_next = redirect_taken ? redirect_target : pc_plus_4;
+    assign pc_next = mem_redirect_taken ? mem_redirect_target
+        : redirect_taken ? redirect_target : pc_plus_4;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -139,6 +182,7 @@ module cpu_top (
     // 传递
     always_comb begin
         if_id_next.inst = inst_data;
+        if_id_next.valid = 1'b1;
         if_id_next.pc = pc;
         if_id_next.pc_plus_4 = pc_plus_4;
     end
@@ -153,6 +197,13 @@ module cpu_top (
     logic [2:0] imm_type;
     logic use_rs1;
     logic use_rs2;
+    logic is_ecall;
+    logic is_ebreak;
+    logic is_mret;
+    logic is_sfence_vma;
+    logic illegal;
+    logic id_exc_valid;
+    logic [4:0] id_exc_cause;
 
     // inst decode
     inst_decoder u_inst_decoder (
@@ -172,6 +223,8 @@ module cpu_top (
         .funct3(funct3),
         .funct7(funct7),
         .funct5(rs2),
+        .rs1(rs1),
+        .rd(if_id.inst[11:7]),
         .rf_w_en(id_ex_next.rf_w_en),
         .mem_req(id_ex_next.mem_req),
         .mem_we(id_ex_next.mem_we),
@@ -185,7 +238,15 @@ module cpu_top (
         .is_jalr(id_ex_next.is_jalr),
         .wb_sel(id_ex_next.wb_sel),
         .use_rs1(use_rs1),
-        .use_rs2(use_rs2)
+        .use_rs2(use_rs2),
+        .csr_op(id_ex_next.csr_op),
+        .csr_use_imm(id_ex_next.csr_use_imm),
+        .csr_w_en(id_ex_next.csr_w_en),
+        .is_ecall(is_ecall),
+        .is_ebreak(is_ebreak),
+        .is_mret(is_mret),
+        .is_sfence_vma(is_sfence_vma),
+        .illegal(illegal)
     );
 
     // imm gen
@@ -213,8 +274,27 @@ module cpu_top (
     assign load_use_hazard = (id_ex.mem_req && !id_ex.mem_we && id_ex.rf_w_en)
         && (id_ex.rd != 5'b0)
         && ((use_rs1 && (id_ex.rd == rs1)) || (use_rs2 && (id_ex.rd == rs2)));
-    assign pc_stall = load_use_hazard;
+    assign pc_stall = load_use_hazard && !mem_redirect_taken;
     assign if_id_stall = pc_stall;
+
+    always_comb begin
+        id_exc_valid = 1'b0;
+        id_exc_cause = 5'd0;
+
+        if (if_id.valid && irq_valid) begin
+            id_exc_valid = 1'b1;
+            id_exc_cause = {1'b1, irq_cause};
+        end else if (illegal || ((is_mret || is_sfence_vma) && (priv_mode != PRIV_M))) begin
+            id_exc_valid = 1'b1;
+            id_exc_cause = EXC_ILLEGAL_INST;
+        end else if (is_ebreak) begin
+            id_exc_valid = 1'b1;
+            id_exc_cause = EXC_BREAKPOINT;
+        end else if (is_ecall) begin
+            id_exc_valid = 1'b1;
+            id_exc_cause = (priv_mode == PRIV_M) ? EXC_ECALL_M : EXC_ECALL_U;
+        end
+    end
 
     // 传递
     always_comb begin
@@ -224,6 +304,10 @@ module cpu_top (
         id_ex_next.use_rs2 = use_rs2;
         id_ex_next.pc = if_id.pc;
         id_ex_next.pc_plus_4 = if_id.pc_plus_4;
+        id_ex_next.inst = if_id.inst;
+        id_ex_next.is_mret = is_mret;
+        id_ex_next.exc_valid = id_exc_valid;
+        id_ex_next.exc_cause = id_exc_cause;
     end
 
     // 3. EX 阶段
@@ -234,8 +318,13 @@ module cpu_top (
     logic br_lt;
     logic br_ltu;
     logic branch_cond;
+    logic redirect_cond;
     logic redirect_taken;
     logic [31:0] redirect_target;
+    logic jump_misalign;
+    logic mem_misalign;
+    logic ex_exc_valid;
+    logic [4:0] ex_exc_cause;
     logic [31:0] rf_rdata1_with_forwarding_considered;
     logic [31:0] rf_rdata2_with_forwarding_considered;
 
@@ -305,14 +394,32 @@ module cpu_top (
         endcase
     end
 
-    assign redirect_taken = (id_ex.pc_sel == 2'b01) && ((id_ex.br_type == 3'd0) || branch_cond);
+    assign redirect_cond = (id_ex.pc_sel == 2'b01) && ((id_ex.br_type == 3'd0) || branch_cond);
     assign redirect_target = id_ex.is_jalr
         ? {ex_mem_next.alu_result[31:1], 1'b0}
         : ex_mem_next.alu_result;
+    assign jump_misalign = redirect_cond && redirect_target[1];
+    assign mem_misalign = id_ex.mem_req && (id_ex.mem_sel == 4'b1111)
+        && (ex_mem_next.alu_result[1:0] != 2'b00);
+    assign redirect_taken = redirect_cond && !id_ex.exc_valid && !jump_misalign;
+
+    always_comb begin
+        ex_exc_valid = id_ex.exc_valid;
+        ex_exc_cause = id_ex.exc_cause;
+
+        if (!id_ex.exc_valid && jump_misalign) begin
+            ex_exc_valid = 1'b1;
+            ex_exc_cause = EXC_INST_MISALIGN;
+        end else if (!id_ex.exc_valid && mem_misalign) begin
+            ex_exc_valid = 1'b1;
+            ex_exc_cause = id_ex.mem_we ? EXC_STORE_MISALIGN : EXC_LOAD_MISALIGN;
+        end
+    end
 
     // flush
-    assign if_id_flush = redirect_taken;
-    assign id_ex_flush = redirect_taken || load_use_hazard;
+    assign if_id_flush = redirect_taken || mem_redirect_taken;
+    assign id_ex_flush = redirect_taken || load_use_hazard || mem_redirect_taken;
+    assign ex_mem_flush = mem_redirect_taken;
 
     // 传递
     always_comb begin
@@ -325,15 +432,35 @@ module cpu_top (
         ex_mem_next.pc_plus_4 = id_ex.pc_plus_4;
         ex_mem_next.rf_w_en = id_ex.rf_w_en;
         ex_mem_next.wb_sel = id_ex.wb_sel;
+        ex_mem_next.pc = id_ex.pc;
+        ex_mem_next.inst = id_ex.inst;
+        ex_mem_next.csr_op = id_ex.csr_op;
+        ex_mem_next.csr_w_en = id_ex.csr_w_en;
+        ex_mem_next.csr_wsrc = id_ex.csr_use_imm
+            ? {27'b0, id_ex.rs1}
+            : rf_rdata1_with_forwarding_considered;
+        ex_mem_next.is_mret = id_ex.is_mret;
+        ex_mem_next.exc_valid = ex_exc_valid;
+        ex_mem_next.exc_cause = ex_exc_cause;
     end
 
     // 4. MEM 阶段
     // 内部状态
     logic [31:0] mem_rdata_with_alignment_considered;
+    logic [31:0] csr_rdata;
+    logic csr_illegal;
+    logic csr_taken;
+    logic mem_exc_valid;
+    logic [4:0] mem_exc_cause;
+    logic [31:0] mem_exc_tval;
+    logic trap_taken;
+    logic [31:0] trap_target;
+    logic mret_taken;
+    logic [31:0] mret_target;
+    logic [31:0] satp;
 
-    assign mem_req = ex_mem.mem_req;
+    assign mem_req = ex_mem.mem_req && !ex_mem.exc_valid;
     // LW/SW 必须 4 字节对齐: 低 2 位不参与寻址
-    // TODO: 非对齐访问的异常
     assign mem_addr = (ex_mem.mem_sel == 4'b1111)
         ? {ex_mem.alu_result[31:2], 2'b00}
         : ex_mem.alu_result; // <- 只支持 LB 和 SB 的非对齐访问
@@ -361,18 +488,72 @@ module cpu_top (
     assign mem_wb_next.wb_data = (ex_mem.wb_sel == 2'b00) ?
         ((ex_mem.mem_sel == 4'b1111) ? mem_rdata : // 1. 4 Bytes; 2. 1 Byte
         {{24{mem_rdata_with_alignment_considered[7]}}, mem_rdata_with_alignment_considered[7:0]}) :
-        (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result : ex_mem.pc_plus_4;
+        (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result :
+        (ex_mem.wb_sel == 2'b10) ? ex_mem.pc_plus_4 : csr_rdata;
+
+    always_comb begin
+        mem_exc_valid = ex_mem.exc_valid;
+        mem_exc_cause = ex_mem.exc_cause;
+
+        if (!ex_mem.exc_valid && (ex_mem.csr_op != 2'b00) && csr_illegal) begin
+            mem_exc_valid = 1'b1;
+            mem_exc_cause = EXC_ILLEGAL_INST;
+        end
+    end
+
+    always_comb begin
+        case (mem_exc_cause)
+            EXC_INST_MISALIGN: mem_exc_tval = {ex_mem.alu_result[31:1], 1'b0};
+            EXC_ILLEGAL_INST: mem_exc_tval = ex_mem.inst;
+            EXC_BREAKPOINT: mem_exc_tval = ex_mem.pc;
+            EXC_LOAD_MISALIGN,
+            EXC_STORE_MISALIGN: mem_exc_tval = ex_mem.alu_result;
+            default: mem_exc_tval = 32'b0;
+        endcase
+    end
+
+    assign trap_taken = mem_exc_valid;
+    assign mret_taken = ex_mem.is_mret && !mem_exc_valid;
+    assign csr_taken = (ex_mem.csr_op != 2'b00) && !mem_exc_valid;
+
+    assign mem_redirect_taken = trap_taken || mret_taken || csr_taken;
+    assign mem_redirect_target = trap_taken ? trap_target
+        : mret_taken ? mret_target : ex_mem.pc_plus_4;
+
+    cpu_csr u_csr (
+        .clk(clk),
+        .rst(rst),
+        .csr_addr(ex_mem.inst[31:20]),
+        .csr_op(ex_mem.csr_op),
+        .csr_wsrc(ex_mem.csr_wsrc),
+        .csr_w_en(ex_mem.csr_w_en),
+        .csr_commit(csr_taken && !global_stall),
+        .csr_rdata(csr_rdata),
+        .csr_illegal(csr_illegal),
+        .trap_commit(trap_taken && !global_stall),
+        .trap_pc(ex_mem.pc),
+        .trap_cause(mem_exc_cause),
+        .trap_tval(mem_exc_tval),
+        .trap_target(trap_target),
+        .mret_commit(mret_taken && !global_stall),
+        .mret_target(mret_target),
+        .timer_irq(timer_irq),
+        .irq_valid(irq_valid),
+        .irq_cause(irq_cause),
+        .priv_mode(priv_mode),
+        .satp(satp)
+    );
 
     // 传递
     always_comb begin
         mem_wb_next.rd = ex_mem.rd;
-        mem_wb_next.rf_w_en = ex_mem.rf_w_en;
+        mem_wb_next.rf_w_en = ex_mem.rf_w_en && !trap_taken;
     end
 
     // 状态更新
     // nop: addi x0, x0, 0
     // verilog_lint: waive-start parameter-name-style
-    localparam if_id_t IF_ID_NOP = '{inst: 32'h0000_0013, pc: '0, pc_plus_4: '0};
+    localparam if_id_t IF_ID_NOP = '{inst: 32'h0000_0013, valid: 1'b0, pc: '0, pc_plus_4: '0};
     // verilog_lint: waive-stop parameter-name-style
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -400,7 +581,12 @@ module cpu_top (
                 id_ex <= id_ex_next;
             end
 
-            ex_mem <= ex_mem_next;
+            if (ex_mem_flush) begin
+                ex_mem <= '0;
+            end else begin
+                ex_mem <= ex_mem_next;
+            end
+
             mem_wb <= mem_wb_next;
         end
     end
