@@ -114,6 +114,8 @@ module thinpad_top (
     logic [31:0] cpu_inst_addr;
     logic [31:0] cpu_inst_data;
     logic cpu_inst_ready;
+    logic cpu_inst_page_fault;
+    logic cpu_inst_access_fault;
 
     logic cpu_mem_req;
     logic [31:0] cpu_mem_addr;
@@ -122,6 +124,14 @@ module thinpad_top (
     logic cpu_mem_we;
     logic [3:0] cpu_mem_sel;
     logic cpu_mem_ready;
+    logic cpu_mem_page_fault;
+    logic cpu_mem_access_fault;
+
+    logic [31:0] cpu_satp;
+    logic [1:0] cpu_inst_priv;
+    logic [1:0] cpu_mem_priv;
+    logic cpu_mstatus_sum;
+    logic cpu_mstatus_mxr;
 
     logic timer_irq;
 
@@ -132,6 +142,8 @@ module thinpad_top (
         .inst_addr(cpu_inst_addr),
         .inst_data(cpu_inst_data),
         .inst_ready(cpu_inst_ready),
+        .inst_page_fault(cpu_inst_page_fault),
+        .inst_access_fault(cpu_inst_access_fault),
         .mem_req(cpu_mem_req),
         .mem_addr(cpu_mem_addr),
         .mem_wdata(cpu_mem_wdata),
@@ -139,6 +151,13 @@ module thinpad_top (
         .mem_we(cpu_mem_we),
         .mem_sel(cpu_mem_sel),
         .mem_ready(cpu_mem_ready),
+        .mem_page_fault(cpu_mem_page_fault),
+        .mem_access_fault(cpu_mem_access_fault),
+        .satp(cpu_satp),
+        .inst_priv(cpu_inst_priv),
+        .mem_priv(cpu_mem_priv),
+        .mstatus_sum(cpu_mstatus_sum),
+        .mstatus_mxr(cpu_mstatus_mxr),
         .timer_irq(timer_irq)
     );
 
@@ -156,19 +175,17 @@ module thinpad_top (
     wb_master u_wb_master (
         .clk_i(sys_clk),
         .rst_i(sys_rst),
-        // Boot in Bare/M until the CPU supplies satp, effective privilege,
-        // mstatus.SUM/MXR and consumes channel faults on pipeline advance.
-        .satp_i(32'b0),
-        .inst_priv_i(2'b11),
-        .mem_priv_i(2'b11),
-        .sum_i(1'b0),
-        .mxr_i(1'b0),
+        .satp_i(cpu_satp),
+        .inst_priv_i(cpu_inst_priv),
+        .mem_priv_i(cpu_mem_priv),
+        .sum_i(cpu_mstatus_sum),
+        .mxr_i(cpu_mstatus_mxr),
         .inst_req_i(cpu_inst_req),
         .inst_addr_i(cpu_inst_addr),
         .inst_rdata_o(cpu_inst_data),
         .inst_ready_o(cpu_inst_ready),
-        .inst_page_fault_o(),
-        .inst_access_fault_o(),
+        .inst_page_fault_o(cpu_inst_page_fault),
+        .inst_access_fault_o(cpu_inst_access_fault),
         .mem_req_i(cpu_mem_req),
         .mem_we_i(cpu_mem_we),
         .mem_sel_i(cpu_mem_sel),
@@ -176,8 +193,8 @@ module thinpad_top (
         .mem_wdata_i(cpu_mem_wdata),
         .mem_rdata_o(cpu_mem_rdata),
         .mem_ready_o(cpu_mem_ready),
-        .mem_page_fault_o(),
-        .mem_access_fault_o(),
+        .mem_page_fault_o(cpu_mem_page_fault),
+        .mem_access_fault_o(cpu_mem_access_fault),
         .wb_cyc_o(wbm_cyc_o),
         .wb_stb_o(wbm_stb_o),
         .wb_ack_i(wbm_ack_i),
