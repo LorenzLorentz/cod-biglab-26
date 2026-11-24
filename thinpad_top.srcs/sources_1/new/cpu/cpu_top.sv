@@ -7,6 +7,8 @@ module cpu_top (
     output logic [31:0] inst_addr,
     input [31:0] inst_data,
     input inst_ready,
+    input inst_page_fault,
+    input inst_access_fault,
 
     // 数据总线
     output logic mem_req,
@@ -16,6 +18,14 @@ module cpu_top (
     output logic mem_we,
     output logic [3:0] mem_sel,
     input mem_ready,
+    input mem_page_fault,
+    input mem_access_fault,
+
+    output logic [31:0] satp,
+    output logic [1:0] inst_priv,
+    output logic [1:0] mem_priv,
+    output logic mstatus_sum,
+    output logic mstatus_mxr,
 
     input logic timer_irq
 );
@@ -29,6 +39,8 @@ module cpu_top (
         // 后续需要
         logic [31:0] pc; // EX 需要
         logic [31:0] pc_plus_4; // WB 需要
+        logic fetch_exc_valid;
+        logic [4:0] fetch_exc_cause;
     } if_id_t;
 
     // ID -> EX
@@ -72,6 +84,7 @@ module cpu_top (
         logic csr_use_imm;
         logic csr_w_en;
         logic is_mret;
+        logic is_sfence_vma;
         logic exc_valid;
         logic [4:0] exc_cause;
     } id_ex_t;
@@ -101,6 +114,7 @@ module cpu_top (
         logic csr_w_en;
         logic [31:0] csr_wsrc;
         logic is_mret;
+        logic is_sfence_vma;
         logic exc_valid;
         logic [4:0] exc_cause;
     } ex_mem_t;
@@ -123,12 +137,18 @@ module cpu_top (
 
     typedef enum logic [4:0] {
         EXC_INST_MISALIGN = 5'd0,
+        EXC_INST_ACCESS = 5'd1,
         EXC_ILLEGAL_INST = 5'd2,
         EXC_BREAKPOINT = 5'd3,
         EXC_LOAD_MISALIGN = 5'd4,
+        EXC_LOAD_ACCESS = 5'd5,
         EXC_STORE_MISALIGN = 5'd6,
+        EXC_STORE_ACCESS = 5'd7,
         EXC_ECALL_U = 5'd8,
-        EXC_ECALL_M = 5'd11
+        EXC_ECALL_M = 5'd11,
+        EXC_INST_PAGE = 5'd12,
+        EXC_LOAD_PAGE = 5'd13,
+        EXC_STORE_PAGE = 5'd15
     } exc_cause_t;
 
     if_id_t if_id, if_id_next;
@@ -153,6 +173,8 @@ module cpu_top (
     logic [3:0] irq_cause;
     logic mem_redirect_taken;
     logic [31:0] mem_redirect_target;
+
+    assign inst_priv = priv_mode;
 
     // 执行
     // 1. IF阶段
@@ -185,6 +207,9 @@ module cpu_top (
         if_id_next.valid = 1'b1;
         if_id_next.pc = pc;
         if_id_next.pc_plus_4 = pc_plus_4;
+        if_id_next.fetch_exc_valid = inst_page_fault || inst_access_fault;
+        if_id_next.fetch_exc_cause = inst_access_fault
+            ? EXC_INST_ACCESS : EXC_INST_PAGE;
     end
 
     // 2. ID阶段
@@ -281,16 +306,20 @@ module cpu_top (
         id_exc_valid = 1'b0;
         id_exc_cause = 5'd0;
 
-        if (if_id.valid && irq_valid) begin
+        if (if_id.valid && if_id.fetch_exc_valid) begin
+            id_exc_valid = 1'b1;
+            id_exc_cause = if_id.fetch_exc_cause;
+        end else if (if_id.valid && irq_valid) begin
             id_exc_valid = 1'b1;
             id_exc_cause = {1'b1, irq_cause};
-        end else if (illegal || ((is_mret || is_sfence_vma) && (priv_mode != PRIV_M))) begin
+        end else if (if_id.valid
+            && (illegal || ((is_mret || is_sfence_vma) && (priv_mode != PRIV_M)))) begin
             id_exc_valid = 1'b1;
             id_exc_cause = EXC_ILLEGAL_INST;
-        end else if (is_ebreak) begin
+        end else if (if_id.valid && is_ebreak) begin
             id_exc_valid = 1'b1;
             id_exc_cause = EXC_BREAKPOINT;
-        end else if (is_ecall) begin
+        end else if (if_id.valid && is_ecall) begin
             id_exc_valid = 1'b1;
             id_exc_cause = (priv_mode == PRIV_M) ? EXC_ECALL_M : EXC_ECALL_U;
         end
@@ -306,6 +335,7 @@ module cpu_top (
         id_ex_next.pc_plus_4 = if_id.pc_plus_4;
         id_ex_next.inst = if_id.inst;
         id_ex_next.is_mret = is_mret;
+        id_ex_next.is_sfence_vma = is_sfence_vma;
         id_ex_next.exc_valid = id_exc_valid;
         id_ex_next.exc_cause = id_exc_cause;
     end
@@ -440,6 +470,7 @@ module cpu_top (
             ? {27'b0, id_ex.rs1}
             : rf_rdata1_with_forwarding_considered;
         ex_mem_next.is_mret = id_ex.is_mret;
+        ex_mem_next.is_sfence_vma = id_ex.is_sfence_vma;
         ex_mem_next.exc_valid = ex_exc_valid;
         ex_mem_next.exc_cause = ex_exc_cause;
     end
@@ -456,8 +487,8 @@ module cpu_top (
     logic trap_taken;
     logic [31:0] trap_target;
     logic mret_taken;
+    logic sfence_taken;
     logic [31:0] mret_target;
-    logic [31:0] satp;
 
     assign mem_req = ex_mem.mem_req && !ex_mem.exc_valid;
     // LW/SW 必须 4 字节对齐: 低 2 位不参与寻址
@@ -498,25 +529,38 @@ module cpu_top (
         if (!ex_mem.exc_valid && (ex_mem.csr_op != 2'b00) && csr_illegal) begin
             mem_exc_valid = 1'b1;
             mem_exc_cause = EXC_ILLEGAL_INST;
+        end else if (!ex_mem.exc_valid && ex_mem.mem_req && mem_page_fault) begin
+            mem_exc_valid = 1'b1;
+            mem_exc_cause = ex_mem.mem_we ? EXC_STORE_PAGE : EXC_LOAD_PAGE;
+        end else if (!ex_mem.exc_valid && ex_mem.mem_req && mem_access_fault) begin
+            mem_exc_valid = 1'b1;
+            mem_exc_cause = ex_mem.mem_we ? EXC_STORE_ACCESS : EXC_LOAD_ACCESS;
         end
     end
 
     always_comb begin
         case (mem_exc_cause)
             EXC_INST_MISALIGN: mem_exc_tval = {ex_mem.alu_result[31:1], 1'b0};
+            EXC_INST_ACCESS,
+            EXC_INST_PAGE: mem_exc_tval = ex_mem.pc;
             EXC_ILLEGAL_INST: mem_exc_tval = ex_mem.inst;
             EXC_BREAKPOINT: mem_exc_tval = ex_mem.pc;
             EXC_LOAD_MISALIGN,
-            EXC_STORE_MISALIGN: mem_exc_tval = ex_mem.alu_result;
+            EXC_STORE_MISALIGN,
+            EXC_LOAD_ACCESS,
+            EXC_STORE_ACCESS,
+            EXC_LOAD_PAGE,
+            EXC_STORE_PAGE: mem_exc_tval = ex_mem.alu_result;
             default: mem_exc_tval = 32'b0;
         endcase
     end
 
     assign trap_taken = mem_exc_valid;
     assign mret_taken = ex_mem.is_mret && !mem_exc_valid;
+    assign sfence_taken = ex_mem.is_sfence_vma && !mem_exc_valid;
     assign csr_taken = (ex_mem.csr_op != 2'b00) && !mem_exc_valid;
 
-    assign mem_redirect_taken = trap_taken || mret_taken || csr_taken;
+    assign mem_redirect_taken = trap_taken || mret_taken || sfence_taken || csr_taken;
     assign mem_redirect_target = trap_taken ? trap_target
         : mret_taken ? mret_target : ex_mem.pc_plus_4;
 
@@ -541,6 +585,9 @@ module cpu_top (
         .irq_valid(irq_valid),
         .irq_cause(irq_cause),
         .priv_mode(priv_mode),
+        .mem_priv(mem_priv),
+        .mstatus_sum(mstatus_sum),
+        .mstatus_mxr(mstatus_mxr),
         .satp(satp)
     );
 
@@ -553,7 +600,10 @@ module cpu_top (
     // 状态更新
     // nop: addi x0, x0, 0
     // verilog_lint: waive-start parameter-name-style
-    localparam if_id_t IF_ID_NOP = '{inst: 32'h0000_0013, valid: 1'b0, pc: '0, pc_plus_4: '0};
+    localparam if_id_t IF_ID_NOP = '{
+        inst: 32'h0000_0013, valid: 1'b0, pc: '0, pc_plus_4: '0,
+        fetch_exc_valid: 1'b0, fetch_exc_cause: '0
+    };
     // verilog_lint: waive-stop parameter-name-style
     always_ff @(posedge clk) begin
         if (rst) begin
