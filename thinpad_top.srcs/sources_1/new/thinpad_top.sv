@@ -123,6 +123,8 @@ module thinpad_top (
     logic [3:0] cpu_mem_sel;
     logic cpu_mem_ready;
 
+    logic timer_irq;
+
     cpu_top u_cpu (
         .clk(sys_clk),
         .rst(sys_rst),
@@ -136,7 +138,8 @@ module thinpad_top (
         .mem_rdata(cpu_mem_rdata),
         .mem_we(cpu_mem_we),
         .mem_sel(cpu_mem_sel),
-        .mem_ready(cpu_mem_ready)
+        .mem_ready(cpu_mem_ready),
+        .timer_irq(timer_irq)
     );
 
     // 总线
@@ -224,7 +227,16 @@ module thinpad_top (
     logic [3:0] wbs3_sel_o;
     logic wbs3_we_o;
 
-    wb_mux_4 wb_mux (
+    logic wbs4_cyc_o;
+    logic wbs4_stb_o;
+    logic wbs4_ack_i;
+    logic [31:0] wbs4_adr_o;
+    logic [31:0] wbs4_dat_o;
+    logic [31:0] wbs4_dat_i;
+    logic [3:0] wbs4_sel_o;
+    logic wbs4_we_o;
+
+    wb_mux_5 wb_mux (
         .clk(sys_clk),
         .rst(sys_rst),
 
@@ -302,7 +314,23 @@ module thinpad_top (
         .wbs3_ack_i(wbs3_ack_i),
         .wbs3_err_i('0),
         .wbs3_rty_i('0),
-        .wbs3_cyc_o(wbs3_cyc_o)
+        .wbs3_cyc_o(wbs3_cyc_o),
+
+        // Slave interface 4 (to CLINT)
+        // Address range: 0x0200_0000 ~ 0x0200_FFFF
+        .wbs4_addr    (32'h0200_0000),
+        .wbs4_addr_msk(32'hFFFF_0000),
+
+        .wbs4_adr_o(wbs4_adr_o),
+        .wbs4_dat_i(wbs4_dat_i),
+        .wbs4_dat_o(wbs4_dat_o),
+        .wbs4_we_o (wbs4_we_o),
+        .wbs4_sel_o(wbs4_sel_o),
+        .wbs4_stb_o(wbs4_stb_o),
+        .wbs4_ack_i(wbs4_ack_i),
+        .wbs4_err_i('0),
+        .wbs4_rty_i('0),
+        .wbs4_cyc_o(wbs4_cyc_o)
     );
 
     /* =========== lab4 MUX end =========== */
@@ -398,6 +426,22 @@ module thinpad_top (
         .wb_cyc_i(wbs3_cyc_o),
         .wb_err_o(),
         .wb_rty_o()
+    );
+
+    clint u_clint (
+        .clk_i(sys_clk),
+        .rst_i(sys_rst),
+
+        .wb_cyc_i(wbs4_cyc_o),
+        .wb_stb_i(wbs4_stb_o),
+        .wb_ack_o(wbs4_ack_i),
+        .wb_adr_i(wbs4_adr_o),
+        .wb_dat_i(wbs4_dat_o),
+        .wb_dat_o(wbs4_dat_i),
+        .wb_sel_i(wbs4_sel_o),
+        .wb_we_i (wbs4_we_o),
+
+        .timer_irq_o(timer_irq)
     );
 
     /* =========== lab4 Slaves end =========== */
