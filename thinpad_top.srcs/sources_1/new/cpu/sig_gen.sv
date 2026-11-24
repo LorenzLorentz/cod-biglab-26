@@ -3,6 +3,8 @@ module sig_gen(
     input [2:0] funct3,
     input [6:0] funct7,
     input [4:0] funct5, // 即 rs2
+    input [4:0] rs1,
+    input [4:0] rd,
 
     output logic rf_w_en, // reg file 写使能
     output logic mem_req, // mem 请求使能
@@ -17,7 +19,15 @@ module sig_gen(
     output logic is_jalr, // JALR 的目标地址要清最低位
     output logic [1:0] wb_sel, // 写回选择
     output logic use_rs1, // 是否真的读 rs1
-    output logic use_rs2 // 是否真的读 rs2
+    output logic use_rs2, // 是否真的读 rs2
+    output logic [1:0] csr_op,
+    output logic csr_use_imm,
+    output logic csr_w_en,
+    output logic is_ecall,
+    output logic is_ebreak,
+    output logic is_mret,
+    output logic is_sfence_vma,
+    output logic illegal
 );
     always_comb begin
         // 默认情况
@@ -34,6 +44,14 @@ module sig_gen(
         wb_sel = 0;
         use_rs1 = 0; // 默认不读
         use_rs2 = 0; // 默认不读
+        csr_op = 0;
+        csr_use_imm = 0;
+        csr_w_en = 0;
+        is_ecall = 0;
+        is_ebreak = 0;
+        is_mret = 0;
+        is_sfence_vma = 0;
+        illegal = 0;
 
         case (opcode[6:2])
             // R-type
@@ -54,7 +72,10 @@ module sig_gen(
                     {7'b0000000, 3'b011}: alu_op = 4'd6; // SLTU
                     {7'b0100000, 3'b111}: alu_op = 4'd12; // ANDN
                     {7'b0100000, 3'b100}: alu_op = 4'd13; // XNOR
-                    default: rf_w_en = 0; // 不认识的编码不写寄存器
+                    default: begin // 不认识的编码不写寄存器
+                        rf_w_en = 0;
+                        illegal = 1;
+                    end
                 endcase
             end
 
@@ -79,14 +100,23 @@ module sig_gen(
                     3'b001: begin
                         if (funct7 == 7'b0000000) alu_op = 4'd7; // SLLI
                         else if (funct7 == 7'b0110000 && funct5 == 5'd0) alu_op = 4'd10; // CLZ
-                        else rf_w_en = 0;
+                        else begin
+                            rf_w_en = 0;
+                            illegal = 1;
+                        end
                     end
                     3'b101: begin
                         if (funct7 == 7'b0000000) alu_op = 4'd8; // SRLI
                         else if (funct7 == 7'b0100000) alu_op = 4'd9; // SRAI
-                        else rf_w_en = 0;
+                        else begin
+                            rf_w_en = 0;
+                            illegal = 1;
+                        end
                     end
-                    default: rf_w_en = 0;
+                    default: begin
+                        rf_w_en = 0;
+                        illegal = 1;
+                    end
                 endcase
             end
 
@@ -107,6 +137,7 @@ module sig_gen(
                     default: begin
                         mem_req = 0;
                         rf_w_en = 0;
+                        illegal = 1;
                     end
                 endcase
             end
@@ -125,7 +156,11 @@ module sig_gen(
                         mem_sel = 4'b0001; // 1 byte
                     3'b010:
                         mem_sel = 4'b1111; // 1 word
-                    default:;
+                    default: begin
+                        mem_req = 0;
+                        mem_we = 0;
+                        illegal = 1;
+                    end
                 endcase
             end
 
@@ -146,6 +181,7 @@ module sig_gen(
                     default: begin // 不是合法的条件分支: 不跳, 也不读操作数
                         use_rs1 = 0;
                         use_rs2 = 0;
+                        illegal = 1;
                     end
                 endcase
             end
@@ -186,10 +222,41 @@ module sig_gen(
                     use_rs1 = 1;
                     rf_w_en = 1;
                     wb_sel = 2; // pc + 4
+                end else begin
+                    illegal = 1;
                 end
             end
 
-            default:;
+            5'b00011: begin
+                if (funct3 != 3'b000 && funct3 != 3'b001) illegal = 1;
+            end
+
+            5'b11100: begin
+                case (funct3)
+                    3'b000: begin
+                        if (rs1 == 5'd0 && rd == 5'd0 && {funct7, funct5} == 12'h000) is_ecall = 1;
+                        else if (rs1 == 5'd0 && rd == 5'd0 && {funct7, funct5} == 12'h001) is_ebreak = 1;
+                        else if (rs1 == 5'd0 && rd == 5'd0 && {funct7, funct5} == 12'h302) is_mret = 1;
+                        else if (rd == 5'd0 && funct7 == 7'b0001001) is_sfence_vma = 1;
+                        else illegal = 1;
+                    end
+                    3'b100:
+                        illegal = 1;
+                    default: begin
+                        csr_op = funct3[1:0];
+                        csr_use_imm = funct3[2];
+                        csr_w_en = (funct3[1:0] == 2'b01) || (rs1 != 5'd0);
+                        use_rs1 = !funct3[2];
+                        rf_w_en = 1;
+                        wb_sel = 3;
+                    end
+                endcase
+            end
+
+            default:
+                illegal = 1;
         endcase
+
+        if (opcode[1:0] != 2'b11) illegal = 1;
     end
 endmodule
