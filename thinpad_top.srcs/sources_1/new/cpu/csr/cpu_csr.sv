@@ -24,6 +24,9 @@ module cpu_csr (
     output logic [3:0] irq_cause,
 
     output logic [1:0] priv_mode,
+    output logic [1:0] mem_priv,
+    output logic mstatus_sum,
+    output logic mstatus_mxr,
     output logic [31:0] satp
 );
     typedef enum logic [11:0] {
@@ -69,7 +72,11 @@ module cpu_csr (
     } misa_t;
 
     typedef struct packed {
-        logic [18:0] zero_31_13;
+        logic [11:0] zero_31_20;
+        logic mxr;
+        logic sum;
+        logic mprv;
+        logic [3:0] zero_16_13;
         logic [1:0] mpp;
         logic [2:0] zero_10_8;
         logic mpie;
@@ -96,6 +103,7 @@ module cpu_csr (
     } satp_t;
 
     logic [1:0] mstatus_mpp;
+    logic mstatus_mprv;
     logic mstatus_mpie;
     logic mstatus_mie;
     logic mie_mti;
@@ -120,11 +128,16 @@ module cpu_csr (
     mtvec_t mtvec_wdata;
     satp_t satp_wdata;
 
-    assign mstatus = {19'b0, mstatus_mpp, 3'b0, mstatus_mpie, 3'b0, mstatus_mie, 3'b0};
+    assign mstatus = {
+        12'b0, mstatus_mxr, mstatus_sum, mstatus_mprv, 4'b0,
+        mstatus_mpp, 3'b0, mstatus_mpie, 3'b0, mstatus_mie, 3'b0
+    };
     assign mie = {24'b0, mie_mti, 7'b0};
     assign mip = {24'b0, timer_irq, 7'b0};
     assign mtvec = {mtvec_base, 1'b0, mtvec_mode};
     assign satp = {satp_mode, 9'b0, satp_ppn};
+    assign mem_priv = ((priv_mode == PRIV_M) && mstatus_mprv)
+        ? mstatus_mpp : priv_mode;
 
     always_comb begin
         csr_exist = 1'b1;
@@ -177,6 +190,9 @@ module cpu_csr (
         if (rst) begin
             priv_mode <= PRIV_M;
             mstatus_mpp <= PRIV_U;
+            mstatus_mprv <= 1'b0;
+            mstatus_sum <= 1'b0;
+            mstatus_mxr <= 1'b0;
             mstatus_mpie <= 1'b0;
             mstatus_mie <= 1'b0;
             mie_mti <= 1'b0;
@@ -199,6 +215,9 @@ module cpu_csr (
         end else if (mret_commit) begin
             priv_mode <= mstatus_mpp;
             mstatus_mpp <= PRIV_U;
+            if (mstatus_mpp != PRIV_M) begin
+                mstatus_mprv <= 1'b0;
+            end
             mstatus_mpie <= 1'b1;
             mstatus_mie <= mstatus_mpie;
         end else if (csr_commit && csr_w_en) begin
@@ -209,6 +228,9 @@ module cpu_csr (
                 end
 
                 CSR_MSTATUS: begin
+                    mstatus_mprv <= mstatus_wdata.mprv;
+                    mstatus_sum <= mstatus_wdata.sum;
+                    mstatus_mxr <= mstatus_wdata.mxr;
                     mstatus_mpie <= mstatus_wdata.mpie;
                     mstatus_mie <= mstatus_wdata.mie;
                     if ((mstatus_wdata.mpp == PRIV_M) || (mstatus_wdata.mpp == PRIV_U)) begin
