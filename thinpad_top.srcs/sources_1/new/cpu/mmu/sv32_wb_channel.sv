@@ -1,14 +1,13 @@
 `timescale 1ns/1ps
 
-// One outstanding CPU request. Walks use this channel's physical Wishbone
-// port, and CHECK_PTE releases the port between consecutive transactions.
+// 每次处理一个 CPU 请求. 查页表和实际访存共用 Wishbone, 检查页表项时释放总线
 module sv32_wb_channel #(
     parameter bit INSTRUCTION = 1'b0
 ) (
     input  wire        clk_i,
     input  wire        rst_i,
     input  wire [31:0] satp_i,
-    input  wire [1:0]  priv_i,  // effective privilege for this access
+    input  wire [1:0]  priv_i,  // 本次访问的有效特权级
     input  wire        sum_i,
     input  wire        mxr_i,
 
@@ -23,7 +22,7 @@ module sv32_wb_channel #(
     output wire        access_fault_o,
     input  wire        cpu_step_i,
 
-    output wire        wb_req_o,  // classic cycle, drives both CYC and STB
+    output wire        wb_req_o,  // 同时驱动 CYC 和 STB
     output wire [31:0] wb_adr_o,
     output wire        wb_we_o,
     output wire [3:0]  wb_sel_o,
@@ -48,15 +47,15 @@ module sv32_wb_channel #(
     wire pte_x = pte_q[3];
     wire pte_u = pte_q[4];
     wire leaf = pte_r || pte_x;
-    // SUM permits S-mode data accesses to U pages. S-mode fetches from U
-    // pages always fault. MXR applies only to loads.
+    // SUM 允许 S 态读写用户页, S 态从用户页取指仍会触发缺页异常
+    // MXR 允许从可执行页读取数据
     wire privilege_ok = user_q ? pte_u : (!pte_u || (sum_q && !INSTRUCTION));
     wire access_ok = INSTRUCTION ? pte_x :
                      we_q ? pte_w : (pte_r || (mxr_q && pte_x));
     wire misaligned_superpage = root_level_q && (pte_q[19:10] != 10'b0);
 
     assign wb_req_o = (state == READ_PTE) || (state == ACCESS);
-    assign wb_adr_o = paddr_q[31:0];  // ThinPAD exposes 32 of Sv32's 34 PA bits
+    assign wb_adr_o = paddr_q[31:0];  // ThinPAD 只使用物理地址的低 32 位
     assign wb_we_o  = (state == ACCESS) && we_q;
     assign wb_sel_o = (state == ACCESS) ? sel_q : 4'b1111;
     assign wb_dat_o = wdata_q;
@@ -99,7 +98,7 @@ module sv32_wb_channel #(
                     end
                 end
 
-                // The course omits A/D updates and ignores G and RSW.
+                // 按实验要求跳过 A/D 位更新, 忽略 G 和 RSW
                 CHECK_PTE: begin
                     if (!pte_v || (pte_w && !pte_r)) begin
                         state <= PAGE_FAULT;
@@ -112,7 +111,7 @@ module sv32_wb_channel #(
                             state <= ACCESS;
                         end
                     end else if (!root_level_q || pte_u) begin
-                        state <= PAGE_FAULT;  // exhausted levels or reserved non-leaf U
+                        state <= PAGE_FAULT;  // 已到末级, 或非叶子项的保留位 U 为 1
                     end else begin
                         root_level_q <= 1'b0;
                         paddr_q <= {pte_q[31:10], vaddr_q[21:12], 2'b00};
