@@ -46,7 +46,7 @@ module uart_controller #(
   // uart receiver
   logic rxd_data_ready;
   logic [7:0] rxd_data;
-  logic rxd_clear;
+  wire rxd_clear = rst_i || rxd_data_ready;
 
   async_receiver #(
       .ClkFrequency(CLK_FREQ),
@@ -60,7 +60,11 @@ module uart_controller #(
   );
 
   /*-- internal registers --*/
-  wire [7:0] reg_status = {2'b0, ~txd_busy, 4'b0, rxd_data_ready};
+  logic [7:0] rx_byte;
+  logic rx_valid;
+  wire wb_req = wb_cyc_i && wb_stb_i && !wb_ack_o;
+  wire read_data = wb_req && !wb_we_i && wb_adr_i[7:0] == REG_DATA && (|wb_sel_i);
+  wire [7:0] reg_status = {2'b0, ~txd_busy, 4'b0, rx_valid};
 
   /*-- wishbone fsm --*/
   always_ff @(posedge clk_i) begin
@@ -71,7 +75,7 @@ module uart_controller #(
       if (wb_ack_o) begin
         wb_ack_o <= 0;
       end else begin
-        wb_ack_o <= wb_stb_i;
+        wb_ack_o <= wb_cyc_i && wb_stb_i;
       end
   end
 
@@ -79,7 +83,7 @@ module uart_controller #(
   always_ff @(posedge clk_i) begin
     if (rst_i) begin
       txd_start <= 0;
-    end else if(wb_stb_i && wb_we_i) begin
+    end else if(wb_req && wb_we_i) begin
       case (wb_adr_i[7:0])
         REG_DATA: begin
           if(wb_sel_i[0]) begin
@@ -98,29 +102,33 @@ module uart_controller #(
   // read logic
   always_ff @(posedge clk_i) begin
     if(rst_i) begin
-      rxd_clear <= 1;  // clear rxd to initialize dataready
-    end else if(wb_stb_i && !wb_we_i) begin
+      rx_valid <= 0;  // clear rxd to initialize dataready
+      rx_byte <= '0;
+    end else if (rxd_data_ready && (!rx_valid || read_data)) begin
+      rx_byte <= rxd_data;
+      rx_valid <= 1;
+    end else if (read_data) begin
+      rx_valid <= 0;
+    end
+  end
+
+  always_ff @(posedge clk_i) begin
+    if (!rst_i && wb_req && !wb_we_i) begin
       case (wb_adr_i[7:0])
         REG_DATA: begin
-          if (wb_sel_i[0]) wb_dat_o[7:0] <= rxd_data;
-          if (wb_sel_i[1]) wb_dat_o[15:8] <= rxd_data;
-          if (wb_sel_i[2]) wb_dat_o[23:16] <= rxd_data;
-          if (wb_sel_i[3]) wb_dat_o[31:24] <= rxd_data;
-
-          rxd_clear <= 1;
+          for (int i = 0; i < DATA_WIDTH/8; i++) begin
+            if (wb_sel_i[i]) wb_dat_o[i*8 +: 8] <= rx_byte;
+          end
         end
 
         REG_STATUS: begin
-          if (wb_sel_i[0]) wb_dat_o[7:0] <= reg_status;
-          if (wb_sel_i[1]) wb_dat_o[15:8] <= reg_status;
-          if (wb_sel_i[2]) wb_dat_o[23:16] <= reg_status;
-          if (wb_sel_i[3]) wb_dat_o[31:24] <= reg_status;
+          for (int i = 0; i < DATA_WIDTH/8; i++) begin
+            if (wb_sel_i[i]) wb_dat_o[i*8 +: 8] <= reg_status;
+          end
         end
 
         default: ;  // do nothing
       endcase
-    end else begin
-      rxd_clear <= 0;
     end
   end
 
