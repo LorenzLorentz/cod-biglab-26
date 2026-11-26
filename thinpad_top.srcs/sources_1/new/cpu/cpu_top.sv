@@ -80,9 +80,9 @@ module cpu_top (
         logic [1:0] wb_sel; // WB 需要
 
         logic [31:0] inst;
-        logic [1:0] csr_op;
-        logic csr_use_imm;
-        logic csr_w_en;
+        logic [1:0] csr_op; // CSR 操作
+        logic csr_use_imm; // 写输入选择
+        logic csr_w_en; // CSR 写使能
         logic is_mret;
         logic is_sfence_vma;
         logic exc_valid;
@@ -112,7 +112,7 @@ module cpu_top (
         logic [31:0] inst;
         logic [1:0] csr_op;
         logic csr_w_en;
-        logic [31:0] csr_wsrc;
+        logic [31:0] csr_wsrc; // CSR 写入源数据
         logic is_mret;
         logic is_sfence_vma;
         logic exc_valid;
@@ -302,6 +302,7 @@ module cpu_top (
     assign pc_stall = load_use_hazard && !mem_redirect_taken;
     assign if_id_stall = pc_stall;
 
+    // 异常处理
     always_comb begin
         id_exc_valid = 1'b0;
         id_exc_cause = 5'd0;
@@ -342,8 +343,13 @@ module cpu_top (
 
     // 3. EX 阶段
     // 内部状态
+    // alu
     logic [31:0] alu_a;
     logic [31:0] alu_b;
+    logic [31:0] rf_rdata1_with_forwarding_considered;
+    logic [31:0] rf_rdata2_with_forwarding_considered;
+
+    // br
     logic br_eq;
     logic br_lt;
     logic br_ltu;
@@ -351,12 +357,12 @@ module cpu_top (
     logic redirect_cond;
     logic redirect_taken;
     logic [31:0] redirect_target;
-    logic jump_misalign;
-    logic mem_misalign;
+
+    // 异常
     logic ex_exc_valid;
     logic [4:0] ex_exc_cause;
-    logic [31:0] rf_rdata1_with_forwarding_considered;
-    logic [31:0] rf_rdata2_with_forwarding_considered;
+    logic jump_misalign;
+    logic mem_misalign;
 
     // alu
     // forwarding
@@ -424,15 +430,17 @@ module cpu_top (
         endcase
     end
 
+    // 跳转
     assign redirect_cond = (id_ex.pc_sel == 2'b01) && ((id_ex.br_type == 3'd0) || branch_cond);
     assign redirect_target = id_ex.is_jalr
         ? {ex_mem_next.alu_result[31:1], 1'b0}
         : ex_mem_next.alu_result;
+    assign redirect_taken = redirect_cond && !id_ex.exc_valid && !jump_misalign;
+
+    // 异常处理
     assign jump_misalign = redirect_cond && redirect_target[1];
     assign mem_misalign = id_ex.mem_req && (id_ex.mem_sel == 4'b1111)
         && (ex_mem_next.alu_result[1:0] != 2'b00);
-    assign redirect_taken = redirect_cond && !id_ex.exc_valid && !jump_misalign;
-
     always_comb begin
         ex_exc_valid = id_ex.exc_valid;
         ex_exc_cause = id_ex.exc_cause;
@@ -478,6 +486,8 @@ module cpu_top (
     // 4. MEM 阶段
     // 内部状态
     logic [31:0] mem_rdata_with_alignment_considered;
+
+    // 异常处理
     logic [31:0] csr_rdata;
     logic csr_illegal;
     logic csr_taken;
@@ -503,7 +513,7 @@ module cpu_top (
         ? (ex_mem.mem_sel << ex_mem.alu_result[1:0])
         : ex_mem.mem_sel; // <- 只支持 LB 和 SB 的非对齐访问
 
-    // wb_sel: 0 -> mem_rdata (LB 符号扩展 / LW 整字); 1 -> alu_result; 2 -> pc + 4
+    // wb_sel: 0 -> mem_rdata (LB 符号扩展 / LW 整字); 1 -> alu_result; 2 -> pc + 4; 3 -> csr_rdata
     // LB 情形, 处理对齐
     always_comb begin
         mem_rdata_with_alignment_considered = '0;
@@ -522,6 +532,7 @@ module cpu_top (
         (ex_mem.wb_sel == 2'b01) ? ex_mem.alu_result :
         (ex_mem.wb_sel == 2'b10) ? ex_mem.pc_plus_4 : csr_rdata;
 
+    // 异常处理
     always_comb begin
         mem_exc_valid = ex_mem.exc_valid;
         mem_exc_cause = ex_mem.exc_cause;
@@ -538,6 +549,7 @@ module cpu_top (
         end
     end
 
+    // 异常附加值
     always_comb begin
         case (mem_exc_cause)
             EXC_INST_MISALIGN: mem_exc_tval = {ex_mem.alu_result[31:1], 1'b0};
@@ -560,6 +572,7 @@ module cpu_top (
     assign sfence_taken = ex_mem.is_sfence_vma && !mem_exc_valid;
     assign csr_taken = (ex_mem.csr_op != 2'b00) && !mem_exc_valid;
 
+    // 异常相关强行跳转
     assign mem_redirect_taken = trap_taken || mret_taken || sfence_taken || csr_taken;
     assign mem_redirect_target = trap_taken ? trap_target
         : mret_taken ? mret_target : ex_mem.pc_plus_4;
