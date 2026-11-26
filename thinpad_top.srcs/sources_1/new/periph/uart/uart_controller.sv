@@ -59,6 +59,21 @@ module uart_controller #(
       .RxD_data      (rxd_data)
   );
 
+  // bug fix: 锁存已接收完成的字节, 避免下一帧开始移位时覆盖 RxD_data 导致读出脏数据
+  logic [7:0] rxd_hold;
+  logic rxd_ready_d;
+  always_ff @(posedge clk_i) begin
+      if (rst_i) begin
+          rxd_ready_d <= 1'b0;
+          rxd_hold <= 8'h00;
+      end else begin
+          rxd_ready_d <= rxd_data_ready;
+          if (rxd_data_ready && !rxd_ready_d) begin 
+              rxd_hold <= rxd_data;
+          end
+      end
+  end
+
   /*-- internal registers --*/
   wire [7:0] reg_status = {2'b0, ~txd_busy, 4'b0, rxd_data_ready};
 
@@ -102,10 +117,10 @@ module uart_controller #(
     end else if(wb_stb_i && !wb_we_i) begin
       case (wb_adr_i[7:0])
         REG_DATA: begin
-          if (wb_sel_i[0]) wb_dat_o[7:0] <= rxd_data;
-          if (wb_sel_i[1]) wb_dat_o[15:8] <= rxd_data;
-          if (wb_sel_i[2]) wb_dat_o[23:16] <= rxd_data;
-          if (wb_sel_i[3]) wb_dat_o[31:24] <= rxd_data;
+          if (wb_sel_i[0]) wb_dat_o[7:0] <= rxd_hold;
+          if (wb_sel_i[1]) wb_dat_o[15:8] <= rxd_hold;
+          if (wb_sel_i[2]) wb_dat_o[23:16] <= rxd_hold;
+          if (wb_sel_i[3]) wb_dat_o[31:24] <= rxd_hold;
 
           rxd_clear <= 1;
         end
