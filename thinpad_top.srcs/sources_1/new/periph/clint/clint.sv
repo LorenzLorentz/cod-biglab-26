@@ -1,4 +1,6 @@
-module clint (
+module clint #(
+    parameter int MTIME_DIV = 5 // sys_clk 50MHz 分频到 mtime 10MHz
+) (
     input wire clk_i,
     input wire rst_i,
 
@@ -25,6 +27,21 @@ module clint (
     logic [63:0] mtimecmp;
     logic [63:0] mtimecmp_next;
 
+    // mtime 按 10MHz 计数
+    localparam int DIV_W = (MTIME_DIV > 1) ? $clog2(MTIME_DIV) : 1;
+    logic [DIV_W-1:0] div_cnt;
+    logic mtime_tick;
+
+    assign mtime_tick = (div_cnt == DIV_W'(MTIME_DIV - 1));
+
+    always_ff @(posedge clk_i) begin
+        if (rst_i || mtime_tick) begin
+            div_cnt <= '0;
+        end else begin
+            div_cnt <= div_cnt + 1'b1;
+        end
+    end
+
     logic wb_req;
     logic [15:0] reg_addr;
     logic [31:0] wb_mask;
@@ -34,8 +51,12 @@ module clint (
     assign wb_mask = {{8{wb_sel_i[3]}}, {8{wb_sel_i[2]}}, {8{wb_sel_i[1]}}, {8{wb_sel_i[0]}}};
 
     always_comb begin
-        mtime_next = mtime + 64'd1;
+        mtime_next = mtime;
         mtimecmp_next = mtimecmp;
+
+        if (mtime_tick) begin
+            mtime_next = mtime + 64'd1;
+        end
 
         if (wb_req && wb_we_i) begin
             case (reg_addr)
