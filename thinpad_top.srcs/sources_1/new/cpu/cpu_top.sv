@@ -41,6 +41,10 @@ module cpu_top (
         logic [31:0] pc_plus_4; // WB 需要
         logic fetch_exc_valid;
         logic [4:0] fetch_exc_cause;
+
+        // 分支预测
+        logic pred_taken;
+        logic [31:0] pred_target;
     } if_id_t;
 
     // ID -> EX
@@ -87,6 +91,10 @@ module cpu_top (
         logic is_sfence_vma;
         logic exc_valid;
         logic [4:0] exc_cause;
+
+        // 分支预测
+        logic pred_taken;
+        logic [31:0] pred_target;
     } id_ex_t;
 
     // EX -> MEM
@@ -183,10 +191,18 @@ module cpu_top (
     logic [31:0] pc_plus_4;
     logic [31:0] pc_next;
 
+    // 分支预测
+    logic if_pred_taken;
+    logic [31:0] if_pred_target;
+    logic redirect_mispredict;
+    logic [31:0] redirect_actual_target;
+    logic bpu_update_valid;
+
     assign pc_plus_4 = pc + 4;
-    // pc_sel: 0 -> pc_plus_4; 1 -> redirect_target
+    // 优先级: MEM 重定向 > 预测错误重定向 > 预测的下一条 PC > pc + 4
     assign pc_next = mem_redirect_taken ? mem_redirect_target
-        : redirect_taken ? redirect_target : pc_plus_4;
+        : redirect_mispredict ? redirect_actual_target
+        : if_pred_taken ? if_pred_target : pc_plus_4;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -210,6 +226,8 @@ module cpu_top (
         if_id_next.fetch_exc_valid = inst_page_fault || inst_access_fault;
         if_id_next.fetch_exc_cause = inst_access_fault
             ? EXC_INST_ACCESS : EXC_INST_PAGE;
+        if_id_next.pred_taken = if_pred_taken;
+        if_id_next.pred_target = if_pred_target;
     end
 
     // 2. ID阶段
@@ -339,6 +357,8 @@ module cpu_top (
         id_ex_next.is_sfence_vma = is_sfence_vma;
         id_ex_next.exc_valid = id_exc_valid;
         id_ex_next.exc_cause = id_exc_cause;
+        id_ex_next.pred_taken = if_id.pred_taken;
+        id_ex_next.pred_target = if_id.pred_target;
     end
 
     // 3. EX 阶段
@@ -454,10 +474,33 @@ module cpu_top (
         end
     end
 
-    // flush
-    assign if_id_flush = redirect_taken || mem_redirect_taken;
-    assign id_ex_flush = redirect_taken || load_use_hazard || mem_redirect_taken;
+    // 实际分支预测结果
+    assign redirect_actual_target = redirect_taken ? redirect_target : id_ex.pc_plus_4;
+    assign redirect_mispredict = (id_ex.pred_taken != redirect_taken) // 不需要跳转
+        || (redirect_taken && (id_ex.pred_target != redirect_target)); // 跳转错位置
+    assign bpu_update_valid = (id_ex.pc_sel == 2'b01)
+        && !id_ex.exc_valid
+        && !mem_redirect_taken
+        && !jump_misalign
+        && !global_stall; // 避免同一条指令被重复训练
+
+    // flush; 预测正确时不冲刷
+    assign if_id_flush = redirect_mispredict || mem_redirect_taken;
+    assign id_ex_flush = redirect_mispredict || load_use_hazard || mem_redirect_taken;
     assign ex_mem_flush = mem_redirect_taken;
+
+    // 分支预测器
+    branch_predictor u_branch_predictor (
+        .clk(clk),
+        .rst(rst),
+        .fetch_pc(pc),
+        .pred_taken(if_pred_taken),
+        .pred_target(if_pred_target),
+        .update_valid(bpu_update_valid),
+        .update_pc(id_ex.pc),
+        .update_taken(redirect_taken),
+        .update_target(redirect_target)
+    );
 
     // 传递
     always_comb begin
@@ -615,7 +658,8 @@ module cpu_top (
     // verilog_lint: waive-start parameter-name-style
     localparam if_id_t IF_ID_NOP = '{
         inst: 32'h0000_0013, valid: 1'b0, pc: '0, pc_plus_4: '0,
-        fetch_exc_valid: 1'b0, fetch_exc_cause: '0
+        fetch_exc_valid: 1'b0, fetch_exc_cause: '0,
+        pred_taken: 1'b0, pred_target: '0
     };
     // verilog_lint: waive-stop parameter-name-style
     always_ff @(posedge clk) begin
