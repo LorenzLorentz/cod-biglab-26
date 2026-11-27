@@ -159,6 +159,36 @@ module thinpad_top (
         .timer_irq(timer_irq)
     );
 
+    // I-Cache
+    logic wb_inst_req;
+    logic [31:0] wb_inst_addr;
+    logic [31:0] wb_inst_rdata;
+    logic wb_inst_ready;
+    logic wb_inst_page_fault;
+    logic wb_inst_access_fault;
+
+    icache u_icache (
+        .clk(sys_clk),
+        .rst(sys_rst),
+        .satp_i(cpu_satp),
+        .flush_i(1'b0), // fence.i 后续提交接入
+        .req_i(cpu_inst_req),
+        .vaddr_i(cpu_inst_addr),
+        .rdata_o(cpu_inst_data),
+        .ready_o(cpu_inst_ready),
+        .page_fault_o(cpu_inst_page_fault),
+        .access_fault_o(cpu_inst_access_fault),
+        .wb_req_o(wb_inst_req),
+        .wb_adr_o(wb_inst_addr),
+        .wb_dat_i(wb_inst_rdata),
+        .wb_ready_i(wb_inst_ready),
+        .wb_page_fault_i(wb_inst_page_fault),
+        .wb_access_fault_i(wb_inst_access_fault),
+        .st_req_i(cpu_mem_req),
+        .st_we_i(cpu_mem_we),
+        .st_addr_i(cpu_mem_addr)
+    );
+
     // 总线
     logic wbm_cyc_o; // master -> slave: 占用总线
     logic wbm_stb_o; // master -> slave: 当前信号有效
@@ -178,12 +208,12 @@ module thinpad_top (
         .mem_priv_i(cpu_mem_priv),
         .sum_i(cpu_mstatus_sum),
         .mxr_i(cpu_mstatus_mxr),
-        .inst_req_i(cpu_inst_req),
-        .inst_addr_i(cpu_inst_addr),
-        .inst_rdata_o(cpu_inst_data),
-        .inst_ready_o(cpu_inst_ready),
-        .inst_page_fault_o(cpu_inst_page_fault),
-        .inst_access_fault_o(cpu_inst_access_fault),
+        .inst_req_i(wb_inst_req),
+        .inst_addr_i(wb_inst_addr),
+        .inst_rdata_o(wb_inst_rdata),
+        .inst_ready_o(wb_inst_ready),
+        .inst_page_fault_o(wb_inst_page_fault),
+        .inst_access_fault_o(wb_inst_access_fault),
         .mem_req_i(cpu_mem_req),
         .mem_we_i(cpu_mem_we),
         .mem_sel_i(cpu_mem_sel),
