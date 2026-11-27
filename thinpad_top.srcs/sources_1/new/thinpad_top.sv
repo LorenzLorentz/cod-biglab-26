@@ -130,6 +130,9 @@ module thinpad_top (
     logic [1:0] cpu_mem_priv;
     logic cpu_mstatus_sum;
     logic cpu_mstatus_mxr;
+    logic cpu_fence_i_flush;
+    logic cpu_sb_empty;
+    logic cpu_icache_busy;
 
     logic timer_irq;
 
@@ -156,7 +159,10 @@ module thinpad_top (
         .mem_priv(cpu_mem_priv),
         .mstatus_sum(cpu_mstatus_sum),
         .mstatus_mxr(cpu_mstatus_mxr),
-        .timer_irq(timer_irq)
+        .fence_i_flush(cpu_fence_i_flush),
+        .timer_irq(timer_irq),
+        .sb_empty(cpu_sb_empty),
+        .icache_idle(!cpu_icache_busy)
     );
 
     // I-Cache
@@ -166,27 +172,84 @@ module thinpad_top (
     logic wb_inst_ready;
     logic wb_inst_page_fault;
     logic wb_inst_access_fault;
+    logic wb_inst_idle;
 
     icache u_icache (
         .clk(sys_clk),
         .rst(sys_rst),
         .satp_i(cpu_satp),
-        .flush_i(1'b0), // fence.i 后续提交接入
+        .flush_i(cpu_fence_i_flush),
         .req_i(cpu_inst_req),
-        .vaddr_i(cpu_inst_addr),
+        .addr_i(cpu_inst_addr),
         .rdata_o(cpu_inst_data),
         .ready_o(cpu_inst_ready),
         .page_fault_o(cpu_inst_page_fault),
         .access_fault_o(cpu_inst_access_fault),
         .wb_req_o(wb_inst_req),
-        .wb_adr_o(wb_inst_addr),
-        .wb_dat_i(wb_inst_rdata),
+        .wb_addr_o(wb_inst_addr),
+        .wb_rdata_i(wb_inst_rdata),
         .wb_ready_i(wb_inst_ready),
+        .wb_idle_i(wb_inst_idle),
         .wb_page_fault_i(wb_inst_page_fault),
         .wb_access_fault_i(wb_inst_access_fault),
-        .st_req_i(cpu_mem_req),
-        .st_we_i(cpu_mem_we),
-        .st_addr_i(cpu_mem_addr)
+        .busy_o(cpu_icache_busy),
+        .merge_addr_o(ic_merge_addr),
+        .merge_data_o(ic_merge_data),
+        .merge_data_i(dc_merge_data),
+        .st_req_i(dc_snoop_valid),
+        .st_addr_i(dc_snoop_addr)
+    );
+
+    // D-Cache
+    logic wb_mem_req;
+    logic wb_mem_we;
+    logic [3:0] wb_mem_sel;
+    logic [31:0] wb_mem_addr;
+    logic [31:0] wb_mem_wdata;
+    logic [31:0] wb_mem_rdata;
+    logic wb_mem_ready;
+    logic wb_mem_page_fault;
+    logic wb_mem_access_fault;
+    logic wb_mem_idle;
+    logic cpu_step;
+    logic dc_snoop_valid;
+    logic [31:0] dc_snoop_addr;
+    logic [31:0] ic_merge_addr;
+    logic [31:0] ic_merge_data;
+    logic [31:0] dc_merge_data;
+
+    assign cpu_step = cpu_inst_ready && cpu_mem_ready;
+
+    dcache u_dcache (
+        .clk(sys_clk),
+        .rst(sys_rst),
+        .satp_i(cpu_satp),
+        .cpu_step_i(cpu_step),
+        .req_i(cpu_mem_req),
+        .we_i(cpu_mem_we),
+        .sel_i(cpu_mem_sel),
+        .addr_i(cpu_mem_addr),
+        .wdata_i(cpu_mem_wdata),
+        .rdata_o(cpu_mem_rdata),
+        .ready_o(cpu_mem_ready),
+        .page_fault_o(cpu_mem_page_fault),
+        .access_fault_o(cpu_mem_access_fault),
+        .wb_req_o(wb_mem_req),
+        .wb_we_o(wb_mem_we),
+        .wb_sel_o(wb_mem_sel),
+        .wb_addr_o(wb_mem_addr),
+        .wb_wdata_o(wb_mem_wdata),
+        .wb_rdata_i(wb_mem_rdata),
+        .wb_ready_i(wb_mem_ready),
+        .wb_idle_i(wb_mem_idle),
+        .wb_page_fault_i(wb_mem_page_fault),
+        .wb_access_fault_i(wb_mem_access_fault),
+        .sb_empty_o(cpu_sb_empty),
+        .snoop_valid_o(dc_snoop_valid),
+        .snoop_addr_o(dc_snoop_addr),
+        .merge_addr_i(ic_merge_addr),
+        .merge_data_i(ic_merge_data),
+        .merge_data_o(dc_merge_data)
     );
 
     // 总线
@@ -214,15 +277,17 @@ module thinpad_top (
         .inst_ready_o(wb_inst_ready),
         .inst_page_fault_o(wb_inst_page_fault),
         .inst_access_fault_o(wb_inst_access_fault),
-        .mem_req_i(cpu_mem_req),
-        .mem_we_i(cpu_mem_we),
-        .mem_sel_i(cpu_mem_sel),
-        .mem_addr_i(cpu_mem_addr),
-        .mem_wdata_i(cpu_mem_wdata),
-        .mem_rdata_o(cpu_mem_rdata),
-        .mem_ready_o(cpu_mem_ready),
-        .mem_page_fault_o(cpu_mem_page_fault),
-        .mem_access_fault_o(cpu_mem_access_fault),
+        .inst_idle_o(wb_inst_idle),
+        .mem_req_i(wb_mem_req),
+        .mem_we_i(wb_mem_we),
+        .mem_sel_i(wb_mem_sel),
+        .mem_addr_i(wb_mem_addr),
+        .mem_wdata_i(wb_mem_wdata),
+        .mem_rdata_o(wb_mem_rdata),
+        .mem_ready_o(wb_mem_ready),
+        .mem_page_fault_o(wb_mem_page_fault),
+        .mem_access_fault_o(wb_mem_access_fault),
+        .mem_idle_o(wb_mem_idle),
         .wb_cyc_o(wbm_cyc_o),
         .wb_stb_o(wbm_stb_o),
         .wb_ack_i(wbm_ack_i),

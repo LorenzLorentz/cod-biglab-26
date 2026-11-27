@@ -27,6 +27,8 @@ module sig_gen(
     output logic is_ebreak,
     output logic is_mret,
     output logic is_sfence_vma,
+    output logic is_fence_i,
+    output logic is_fence,
     output logic illegal
 );
     always_comb begin
@@ -51,6 +53,8 @@ module sig_gen(
         is_ebreak = 0;
         is_mret = 0;
         is_sfence_vma = 0;
+        is_fence_i = 0;
+        is_fence = 0;
         illegal = 0;
 
         case (opcode[6:2])
@@ -228,7 +232,10 @@ module sig_gen(
             end
 
             5'b00011: begin
-                if (funct3 != 3'b000 && funct3 != 3'b001) illegal = 1;
+                // FENCE (000) 是访存顺序屏障, FENCE.I (001) 是取指屏障
+                if (funct3 == 3'b001) is_fence_i = 1;
+                else if (funct3 == 3'b000) is_fence = 1;
+                else illegal = 1;
             end
 
             5'b11100: begin
