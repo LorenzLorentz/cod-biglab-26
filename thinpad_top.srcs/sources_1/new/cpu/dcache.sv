@@ -137,13 +137,13 @@ module dcache #(
     // 内部状态
     logic sb_enque;
     logic sb_deque;
+    logic sb_store_space;
     logic sb_store_ready;
 
-    assign sb_store_ready = ((sb_count < SB_DEPTH) || sb_drain_done);
+    assign sb_store_space = ((sb_count < SB_DEPTH) || sb_drain_done);
+    assign sb_store_ready = req_i && we_i && cacheable && sb_store_space;
     assign sb_deque = sb_drain_done;
-    assign sb_enque = req_i && we_i && cacheable // 需要 store
-        && sb_store_ready // 有空间
-        && cpu_step_i; // cpu 步进
+    assign sb_enque = sb_store_ready && cpu_step_i; // cpu 步进才入队
 
     assign snoop_valid_o = sb_enque;
     assign snoop_addr_o = addr_i;
@@ -320,16 +320,11 @@ module dcache #(
     logic bus_finish;
     logic fill_finish;
     logic sync_finish;
-    logic fill_avail;
-    logic sync_avail;
     always_comb begin
         bus_finish = (bus_state == BUS_OP) && wb_ready_i;
         fill_finish = bus_finish && (bus_op == BUS_OP_FILL);
         sync_finish = bus_finish && (bus_op == BUS_OP_SYNC);
         sb_drain_done = bus_finish && (bus_op == BUS_OP_DRAIN);
-
-        fill_avail = fill_finish || ((bus_state == BUS_DONE) && (bus_op == BUS_OP_FILL));
-        sync_avail = sync_finish || ((bus_state == BUS_DONE) && (bus_op == BUS_OP_SYNC));
     end
 
     // FILL返回
