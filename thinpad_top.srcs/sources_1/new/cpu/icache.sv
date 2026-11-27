@@ -18,7 +18,7 @@ module icache #(
     // 总线侧
     output logic wb_req_o,
     output logic [31:0] wb_addr_o,
-    input logic [31:0] wb_data_i,
+    input logic [31:0] wb_rdata_i,
     input logic wb_ready_i,
     input logic wb_page_fault_i,
     input logic wb_access_fault_i,
@@ -49,8 +49,8 @@ module icache #(
 
     // 取指请求
     always_comb begin
-        line_idx = vaddr_i[INDEX_BITS+1:2];
-        line_tag = vaddr_i[31:INDEX_BITS+2];
+        line_idx = addr_i[INDEX_BITS+1:2];
+        line_tag = addr_i[31:INDEX_BITS+2];
 
         hit = valid[line_idx]
             && (tag_arr[line_idx] == line_tag)
@@ -74,12 +74,12 @@ module icache #(
     // 总线请求
     always_comb begin
         wb_req_o = req_i && !hit;
-        wb_adr_o = vaddr_i;
+        wb_addr_o = addr_i;
     end
 
     // 返回结果
     always_comb begin
-        rdata_o = hit ? data_arr[line_idx] : wb_dat_i;
+        rdata_o = hit ? data_arr[line_idx] : wb_rdata_i;
         ready_o = !req_i || hit || wb_ready_i; // 没有请求时不阻塞
         page_fault_o = hit ? 1'b0 : wb_page_fault_i;
         access_fault_o = hit ? 1'b0 : wb_access_fault_i;
@@ -110,7 +110,7 @@ module icache #(
                 if (fill && !(st_hit && (st_idx == line_idx))) begin
                     valid[line_idx] <= 1'b1;
                     tag_arr[line_idx] <= line_tag;
-                    data_arr[line_idx] <= wb_dat_i;
+                    data_arr[line_idx] <= wb_rdata_i;
                 end
             end
         end

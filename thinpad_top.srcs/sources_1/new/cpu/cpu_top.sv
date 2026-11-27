@@ -26,7 +26,7 @@ module cpu_top (
     output logic [1:0] mem_priv,
     output logic mstatus_sum,
     output logic mstatus_mxr,
-
+    output logic fence_i_flush,
     input logic timer_irq
 );
     // 流水线寄存器
@@ -89,6 +89,7 @@ module cpu_top (
         logic csr_w_en; // CSR 写使能
         logic is_mret;
         logic is_sfence_vma;
+        logic is_fence_i;
         logic exc_valid;
         logic [4:0] exc_cause;
 
@@ -123,6 +124,7 @@ module cpu_top (
         logic [31:0] csr_wsrc; // CSR 写入源数据
         logic is_mret;
         logic is_sfence_vma;
+        logic is_fence_i;
         logic exc_valid;
         logic [4:0] exc_cause;
     } ex_mem_t;
@@ -244,6 +246,7 @@ module cpu_top (
     logic is_ebreak;
     logic is_mret;
     logic is_sfence_vma;
+    logic is_fence_i;
     logic illegal;
     logic id_exc_valid;
     logic [4:0] id_exc_cause;
@@ -289,6 +292,7 @@ module cpu_top (
         .is_ebreak(is_ebreak),
         .is_mret(is_mret),
         .is_sfence_vma(is_sfence_vma),
+        .is_fence_i(is_fence_i),
         .illegal(illegal)
     );
 
@@ -355,6 +359,7 @@ module cpu_top (
         id_ex_next.inst = if_id.inst;
         id_ex_next.is_mret = is_mret;
         id_ex_next.is_sfence_vma = is_sfence_vma;
+        id_ex_next.is_fence_i = is_fence_i;
         id_ex_next.exc_valid = id_exc_valid;
         id_ex_next.exc_cause = id_exc_cause;
         id_ex_next.pred_taken = if_id.pred_taken;
@@ -522,6 +527,7 @@ module cpu_top (
             : rf_rdata1_with_forwarding_considered;
         ex_mem_next.is_mret = id_ex.is_mret;
         ex_mem_next.is_sfence_vma = id_ex.is_sfence_vma;
+        ex_mem_next.is_fence_i = id_ex.is_fence_i;
         ex_mem_next.exc_valid = ex_exc_valid;
         ex_mem_next.exc_cause = ex_exc_cause;
     end
@@ -541,6 +547,7 @@ module cpu_top (
     logic [31:0] trap_target;
     logic mret_taken;
     logic sfence_taken;
+    logic fence_i_taken;
     logic [31:0] mret_target;
 
     assign mem_req = ex_mem.mem_req && !ex_mem.exc_valid;
@@ -615,8 +622,13 @@ module cpu_top (
     assign sfence_taken = ex_mem.is_sfence_vma && !mem_exc_valid;
     assign csr_taken = (ex_mem.csr_op != 2'b00) && !mem_exc_valid;
 
+    assign fence_i_taken = ex_mem.is_fence_i && !mem_exc_valid;
+    assign fence_i_flush = fence_i_taken;
+
     // 异常相关强行跳转
-    assign mem_redirect_taken = trap_taken || mret_taken || sfence_taken || csr_taken;
+    assign mem_redirect_taken = trap_taken || mret_taken || sfence_taken || csr_taken
+        || fence_i_taken;
+    // sfence.vma / csr / fence.i 不改控制流, 都重取 pc + 4
     assign mem_redirect_target = trap_taken ? trap_target
         : mret_taken ? mret_target : ex_mem.pc_plus_4;
 

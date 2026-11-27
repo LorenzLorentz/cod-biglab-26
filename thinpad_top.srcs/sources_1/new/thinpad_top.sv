@@ -130,6 +130,7 @@ module thinpad_top (
     logic [1:0] cpu_mem_priv;
     logic cpu_mstatus_sum;
     logic cpu_mstatus_mxr;
+    logic cpu_fence_i_flush;
 
     logic timer_irq;
 
@@ -156,6 +157,7 @@ module thinpad_top (
         .mem_priv(cpu_mem_priv),
         .mstatus_sum(cpu_mstatus_sum),
         .mstatus_mxr(cpu_mstatus_mxr),
+        .fence_i_flush(cpu_fence_i_flush),
         .timer_irq(timer_irq)
     );
 
@@ -171,7 +173,7 @@ module thinpad_top (
         .clk(sys_clk),
         .rst(sys_rst),
         .satp_i(cpu_satp),
-        .flush_i(1'b0), // fence.i 后续提交接入
+        .flush_i(cpu_fence_i_flush),
         .req_i(cpu_inst_req),
         .addr_i(cpu_inst_addr),
         .rdata_o(cpu_inst_data),
