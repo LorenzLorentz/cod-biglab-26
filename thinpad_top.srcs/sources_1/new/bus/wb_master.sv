@@ -16,6 +16,7 @@ module wb_master (
     output logic inst_ready_o,
     output logic inst_page_fault_o,
     output logic inst_access_fault_o,
+    output logic inst_idle_o,
 
     // 数据总线
     input logic mem_req_i,
@@ -27,6 +28,7 @@ module wb_master (
     output logic mem_ready_o,
     output logic mem_page_fault_o,
     output logic mem_access_fault_o,
+    output logic mem_idle_o,
 
     // wb
     output logic wb_cyc_o,
@@ -76,6 +78,7 @@ module wb_master (
         .ready_o(inst_ready_o),
         .page_fault_o(inst_page_fault_o),
         .access_fault_o(inst_access_fault_o),
+        .idle_o(inst_idle_o),
         .cpu_step_i(cpu_step),
         .wb_req_o(inst_bus_req),
         .wb_adr_o(inst_bus_addr),
@@ -103,6 +106,7 @@ module wb_master (
         .ready_o(mem_ready_o),
         .page_fault_o(mem_page_fault_o),
         .access_fault_o(mem_access_fault_o),
+        .idle_o(mem_idle_o),
         .cpu_step_i(cpu_step),
         .wb_req_o(mem_bus_req),
         .wb_adr_o(mem_bus_addr),

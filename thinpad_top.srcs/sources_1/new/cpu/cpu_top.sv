@@ -27,7 +27,9 @@ module cpu_top (
     output logic mstatus_sum,
     output logic mstatus_mxr,
     output logic fence_i_flush,
-    input logic timer_irq
+    input logic timer_irq,
+    input logic sb_empty,
+    input logic icache_idle
 );
     // 流水线寄存器
     // IF -> ID
@@ -90,6 +92,7 @@ module cpu_top (
         logic is_mret;
         logic is_sfence_vma;
         logic is_fence_i;
+        logic is_fence;
         logic exc_valid;
         logic [4:0] exc_cause;
 
@@ -125,6 +128,7 @@ module cpu_top (
         logic is_mret;
         logic is_sfence_vma;
         logic is_fence_i;
+        logic is_fence;
         logic exc_valid;
         logic [4:0] exc_cause;
     } ex_mem_t;
@@ -171,7 +175,13 @@ module cpu_top (
     logic pc_stall;
     logic if_id_stall;
     logic global_stall;
-    assign global_stall = (inst_req && !inst_ready) || (mem_req  && !mem_ready);
+    logic fence_i_pending;
+    logic fence_pending;
+
+    assign global_stall = (inst_req && !inst_ready) || (mem_req && !mem_ready)
+        // fence.i 等 store buffer 排空, 并且 I-cache 没有在途取指
+        || (fence_i_pending && !(sb_empty && icache_idle))
+        || (fence_pending && !sb_empty); // fence 等 store buffer 排空
 
     // flush
     logic if_id_flush;
@@ -247,6 +257,7 @@ module cpu_top (
     logic is_mret;
     logic is_sfence_vma;
     logic is_fence_i;
+    logic is_fence;
     logic illegal;
     logic id_exc_valid;
     logic [4:0] id_exc_cause;
@@ -293,6 +304,7 @@ module cpu_top (
         .is_mret(is_mret),
         .is_sfence_vma(is_sfence_vma),
         .is_fence_i(is_fence_i),
+        .is_fence(is_fence),
         .illegal(illegal)
     );
 
@@ -360,6 +372,7 @@ module cpu_top (
         id_ex_next.is_mret = is_mret;
         id_ex_next.is_sfence_vma = is_sfence_vma;
         id_ex_next.is_fence_i = is_fence_i;
+        id_ex_next.is_fence = is_fence;
         id_ex_next.exc_valid = id_exc_valid;
         id_ex_next.exc_cause = id_exc_cause;
         id_ex_next.pred_taken = if_id.pred_taken;
@@ -528,6 +541,7 @@ module cpu_top (
         ex_mem_next.is_mret = id_ex.is_mret;
         ex_mem_next.is_sfence_vma = id_ex.is_sfence_vma;
         ex_mem_next.is_fence_i = id_ex.is_fence_i;
+        ex_mem_next.is_fence = id_ex.is_fence;
         ex_mem_next.exc_valid = ex_exc_valid;
         ex_mem_next.exc_cause = ex_exc_cause;
     end
@@ -622,8 +636,13 @@ module cpu_top (
     assign sfence_taken = ex_mem.is_sfence_vma && !mem_exc_valid;
     assign csr_taken = (ex_mem.csr_op != 2'b00) && !mem_exc_valid;
 
-    assign fence_i_taken = ex_mem.is_fence_i && !mem_exc_valid;
+    // fence.i: 当 store buffer 排空, 且 I-cache 没有在途取指, 清 I-cache
+    assign fence_i_pending = ex_mem.is_fence_i && !mem_exc_valid;
+    assign fence_i_taken = fence_i_pending && sb_empty && icache_idle;
     assign fence_i_flush = fence_i_taken;
+
+    // fence: 当 store buffer 排空, 顺序执行, 不重定向
+    assign fence_pending = ex_mem.is_fence && !mem_exc_valid;
 
     // 异常相关强行跳转
     assign mem_redirect_taken = trap_taken || mret_taken || sfence_taken || csr_taken

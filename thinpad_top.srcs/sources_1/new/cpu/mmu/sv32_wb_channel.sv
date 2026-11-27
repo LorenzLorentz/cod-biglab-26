@@ -17,6 +17,7 @@ module sv32_wb_channel #(
     output logic ready_o,
     output logic page_fault_o,
     output logic access_fault_o,
+    output logic idle_o,
     input logic cpu_step_i,
 
     output logic wb_req_o,
@@ -89,6 +90,7 @@ module sv32_wb_channel #(
     assign page_fault_o = (state == PAGE_FAULT);
     assign access_fault_o = (state == ACCESS_FAULT);
     assign ready_o = !req_i || (state == DONE) || page_fault_o || access_fault_o;
+    assign idle_o = (state == IDLE);
 
     // 状态机
     always_ff @(posedge clk_i) begin
