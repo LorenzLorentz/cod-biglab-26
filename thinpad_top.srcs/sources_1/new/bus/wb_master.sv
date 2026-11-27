@@ -40,7 +40,8 @@ module wb_master (
     output logic wb_we_o
 );
     // 内部状态
-    logic cpu_step = inst_ready_o && mem_ready_o;
+    logic cpu_step;
+    assign cpu_step = inst_ready_o && mem_ready_o;
 
     // 指令
     logic inst_bus_req;

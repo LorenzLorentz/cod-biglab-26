@@ -52,18 +52,32 @@ module sv32_wb_channel #(
     logic [33:0] paddr_q;
 
     // pte 解析
-    logic pte_v = pte_q[0];
-    logic pte_r = pte_q[1];
-    logic pte_w = pte_q[2];
-    logic pte_x = pte_q[3];
-    logic pte_u = pte_q[4];
-    logic leaf = pte_r || pte_x;
+    logic pte_v;
+    logic pte_r;
+    logic pte_w;
+    logic pte_x;
+    logic pte_u;
+    logic leaf;
+
+    always_comb begin
+        pte_v = pte_q[0];
+        pte_r = pte_q[1];
+        pte_w = pte_q[2];
+        pte_x = pte_q[3];
+        pte_u = pte_q[4];
+        leaf  = pte_r || pte_x;
+    end
 
     // 权限检查
-    logic privilege_ok = user_q ? pte_u : (!pte_u || (sum_q && !INSTRUCTION));
-    logic access_ok = INSTRUCTION ? pte_x :
-        we_q ? pte_w : (pte_r || (mxr_q && pte_x));
-    logic misaligned_superpage = root_level_q && (pte_q[19:10] != 10'b0);
+    logic privilege_ok;
+    logic access_ok;
+    logic misaligned_superpage;
+
+    always_comb begin
+        privilege_ok = user_q ? pte_u : (!pte_u || (sum_q && !INSTRUCTION));
+        access_ok   = INSTRUCTION ? pte_x : (we_q ? pte_w : (pte_r || (mxr_q && pte_x)));
+        misaligned_superpage = root_level_q && (pte_q[19:10] != 10'b0);
+    end
 
     // 总线信号
     assign wb_req_o = (state == READ_PTE) || (state == ACCESS);
