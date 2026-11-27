@@ -173,20 +173,55 @@ module thinpad_top (
         .satp_i(cpu_satp),
         .flush_i(1'b0), // fence.i 后续提交接入
         .req_i(cpu_inst_req),
-        .vaddr_i(cpu_inst_addr),
+        .addr_i(cpu_inst_addr),
         .rdata_o(cpu_inst_data),
         .ready_o(cpu_inst_ready),
         .page_fault_o(cpu_inst_page_fault),
         .access_fault_o(cpu_inst_access_fault),
         .wb_req_o(wb_inst_req),
-        .wb_adr_o(wb_inst_addr),
-        .wb_dat_i(wb_inst_rdata),
+        .wb_addr_o(wb_inst_addr),
+        .wb_rdata_i(wb_inst_rdata),
         .wb_ready_i(wb_inst_ready),
         .wb_page_fault_i(wb_inst_page_fault),
         .wb_access_fault_i(wb_inst_access_fault),
         .st_req_i(cpu_mem_req),
         .st_we_i(cpu_mem_we),
         .st_addr_i(cpu_mem_addr)
+    );
+
+    // D-Cache
+    logic wb_mem_req;
+    logic wb_mem_we;
+    logic [3:0] wb_mem_sel;
+    logic [31:0] wb_mem_addr;
+    logic [31:0] wb_mem_wdata;
+    logic [31:0] wb_mem_rdata;
+    logic wb_mem_ready;
+    logic wb_mem_page_fault;
+    logic wb_mem_access_fault;
+
+    dcache u_dcache (
+        .clk(sys_clk),
+        .rst(sys_rst),
+        .satp_i(cpu_satp),
+        .req_i(cpu_mem_req),
+        .we_i(cpu_mem_we),
+        .sel_i(cpu_mem_sel),
+        .addr_i(cpu_mem_addr),
+        .wdata_i(cpu_mem_wdata),
+        .rdata_o(cpu_mem_rdata),
+        .ready_o(cpu_mem_ready),
+        .page_fault_o(cpu_mem_page_fault),
+        .access_fault_o(cpu_mem_access_fault),
+        .wb_req_o(wb_mem_req),
+        .wb_we_o(wb_mem_we),
+        .wb_sel_o(wb_mem_sel),
+        .wb_addr_o(wb_mem_addr),
+        .wb_wdata_o(wb_mem_wdata),
+        .wb_rdata_i(wb_mem_rdata),
+        .wb_ready_i(wb_mem_ready),
+        .wb_page_fault_i(wb_mem_page_fault),
+        .wb_access_fault_i(wb_mem_access_fault)
     );
 
     // 总线
@@ -214,15 +249,15 @@ module thinpad_top (
         .inst_ready_o(wb_inst_ready),
         .inst_page_fault_o(wb_inst_page_fault),
         .inst_access_fault_o(wb_inst_access_fault),
-        .mem_req_i(cpu_mem_req),
-        .mem_we_i(cpu_mem_we),
-        .mem_sel_i(cpu_mem_sel),
-        .mem_addr_i(cpu_mem_addr),
-        .mem_wdata_i(cpu_mem_wdata),
-        .mem_rdata_o(cpu_mem_rdata),
-        .mem_ready_o(cpu_mem_ready),
-        .mem_page_fault_o(cpu_mem_page_fault),
-        .mem_access_fault_o(cpu_mem_access_fault),
+        .mem_req_i(wb_mem_req),
+        .mem_we_i(wb_mem_we),
+        .mem_sel_i(wb_mem_sel),
+        .mem_addr_i(wb_mem_addr),
+        .mem_wdata_i(wb_mem_wdata),
+        .mem_rdata_o(wb_mem_rdata),
+        .mem_ready_o(wb_mem_ready),
+        .mem_page_fault_o(wb_mem_page_fault),
+        .mem_access_fault_o(wb_mem_access_fault),
         .wb_cyc_o(wbm_cyc_o),
         .wb_stb_o(wbm_stb_o),
         .wb_ack_i(wbm_ack_i),

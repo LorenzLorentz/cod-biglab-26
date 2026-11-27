@@ -9,7 +9,7 @@ module icache #(
 
     // CPU 侧
     input logic req_i, // 取指请求
-    input logic [31:0] vaddr_i, // 取指虚拟地址
+    input logic [31:0] addr_i, // 取指虚拟地址
     output logic [31:0] rdata_o, // 取到的指令
     output logic ready_o,
     output logic page_fault_o,
@@ -17,8 +17,8 @@ module icache #(
 
     // 总线侧
     output logic wb_req_o,
-    output logic [31:0] wb_adr_o,
-    input logic [31:0] wb_dat_i,
+    output logic [31:0] wb_addr_o,
+    input logic [31:0] wb_data_i,
     input logic wb_ready_i,
     input logic wb_page_fault_i,
     input logic wb_access_fault_i,
