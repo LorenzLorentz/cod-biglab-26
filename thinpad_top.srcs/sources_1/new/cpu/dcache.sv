@@ -107,7 +107,7 @@ module dcache #(
             if (flush_all) begin
                 valid <= '0;
             end else begin
-                if (enque && hit) begin
+                if (sb_enque && hit) begin
                     data_arr[line_idx] <= line_merged;
                 end
 
@@ -137,13 +137,15 @@ module dcache #(
     // 内部状态
     logic sb_enque;
     logic sb_deque;
+    logic sb_store_ready;
 
+    assign sb_store_ready = ((sb_count < SB_DEPTH) || sb_drain_done);
     assign sb_deque = sb_drain_done;
     assign sb_enque = req_i && we_i && cacheable // 需要 store
-        && ((sb_count < SB_DEPTH) || sb_drain_done) // 有空间
+        && sb_store_ready // 有空间
         && cpu_step_i; // cpu 步进
 
-    assign snoop_valid_o = enque;
+    assign snoop_valid_o = sb_enque;
     assign snoop_addr_o = addr_i;
 
     // 将要写入内存的数据
@@ -181,7 +183,7 @@ module dcache #(
                 sb_head <= sb_head + 1'b1;
             end
 
-            if (sb_store_enq) begin
+            if (sb_enque) begin
                 sb_addr[sb_tail] <= addr_i;
                 sb_wdata[sb_tail] <= wdata_i;
                 sb_sel[sb_tail] <= sel_i;
@@ -250,13 +252,8 @@ module dcache #(
             bus_wdata_q <= '0;
             bus_sel_q <= '0;
             bus_we_q <= 1'b0;
-
-            fill_data_q <= '0;
-            done_rdata_q <= '0;
-            done_pf_q <= 1'b0;
-            done_af_q <= 1'b0;
         end else begin
-            if (start_valid) begin
+            if (bus_start) begin
                 bus_state <= BUS_OP;
                 bus_op <= bus_start_op;
                 bus_addr_q <= bus_start_addr;
@@ -287,7 +284,7 @@ module dcache #(
 
     always_comb begin
         bus_start = 1'b0;
-        bus_start_op = OP_FILL;
+        bus_start_op = BUS_OP_FILL;
         bus_start_addr = addr_i;
         bus_start_wdata = wdata_i;
         bus_start_sel = we_i ? sel_i : 4'b1111;
@@ -302,14 +299,14 @@ module dcache #(
                 bus_start_sel = 4'b1111;
                 bus_start_we = 1'b0;
             end else if (bus_need_sync) begin
-                bus_start_valid = 1'b1;
+                bus_start = 1'b1;
                 bus_start_op = BUS_OP_SYNC;
                 bus_start_addr = addr_i;
                 bus_start_wdata = wdata_i;
                 bus_start_sel = we_i ? sel_i : 4'b1111;
                 bus_start_we = we_i;
             end else if (!sb_empty) begin
-                bus_start_valid = 1'b1;
+                bus_start = 1'b1;
                 bus_start_op = BUS_OP_DRAIN;
                 bus_start_addr = sb_oldest_addr;
                 bus_start_wdata = sb_oldest_wdata;
@@ -327,18 +324,18 @@ module dcache #(
     logic sync_avail;
     always_comb begin
         bus_finish = (bus_state == BUS_OP) && wb_ready_i;
-        fill_finish = bus_finish && (bus_op == OP_FILL);
-        sync_finish = bus_finish && (bus_op == OP_SYNC);
-        sb_drain_done = bus_finish && (bus_op == OP_DRAIN);
+        fill_finish = bus_finish && (bus_op == BUS_OP_FILL);
+        sync_finish = bus_finish && (bus_op == BUS_OP_SYNC);
+        sb_drain_done = bus_finish && (bus_op == BUS_OP_DRAIN);
 
-        fill_avail = fill_finish || ((bus_state == BUS_DONE) && (bus_op == OP_FILL));
-        sync_avail = sync_finish || ((bus_state == BUS_DONE) && (bus_op == OP_SYNC));
+        fill_avail = fill_finish || ((bus_state == BUS_DONE) && (bus_op == BUS_OP_FILL));
+        sync_avail = sync_finish || ((bus_state == BUS_DONE) && (bus_op == BUS_OP_SYNC));
     end
 
     // FILL返回
     always_comb begin
-        fill_addr = op_addr_q;
-        fill_data = merge_word(op_addr_q, wb_rdata_i);
+        fill_addr = bus_addr_q;
+        fill_data = merge_word(bus_addr_q, wb_rdata_i);
         fill_valid = fill_finish && !wb_page_fault_i && !wb_access_fault_i;
     end
 
@@ -347,24 +344,24 @@ module dcache #(
         wb_req_o = bus_start || (bus_state == BUS_OP);
 
         if (bus_state == BUS_OP) begin
-            wb_we_o = bus_op_we_q;
-            wb_sel_o = bus_op_we_q ? bus_op_sel_q : 4'b1111;
-            wb_addr_o = bus_op_addr_q;
-            wb_wdata_o = bus_op_wdata_q;
+            wb_we_o = bus_we_q;
+            wb_sel_o = bus_we_q ? bus_sel_q : 4'b1111;
+            wb_addr_o = bus_addr_q;
+            wb_wdata_o = bus_wdata_q;
         end else begin
-            wb_we_o = start_we;
-            wb_sel_o = start_we ? start_sel : 4'b1111;
-            wb_addr_o = start_addr;
-            wb_wdata_o = start_wdata;
+            wb_we_o = bus_start_we;
+            wb_sel_o = bus_start_we ? bus_start_sel : 4'b1111;
+            wb_addr_o = bus_start_addr;
+            wb_wdata_o = bus_start_wdata;
         end
     end
 
     // CPU 返回
     // 内部变量
     logic bus_resp;
-    logic [31:0] bus_resp_rdata;
+    logic [31:0] bus_resp_rdata_now;
     assign bus_resp = fill_finish || sync_finish;
-    assign bus_resp_rdata = (bus_op == BUS_OP_FILL) ? fill_data : wb_rdata_i;
+    assign bus_resp_rdata_now = (bus_op == BUS_OP_FILL) ? fill_data : wb_rdata_i;
 
     // 返回数据锁存
     logic [31:0] bus_resp_rdata_q;
@@ -376,7 +373,7 @@ module dcache #(
             bus_resp_rdata_q <= '0;
             bus_resp_pf_q <= 1'b0;
             bus_resp_af_q <= 1'b0;
-        end else if (bus_resp_finish) begin
+        end else if (bus_resp) begin
             bus_resp_rdata_q <= bus_resp_rdata_now;
             bus_resp_pf_q <= wb_page_fault_i;
             bus_resp_af_q <= wb_access_fault_i;
@@ -389,7 +386,7 @@ module dcache #(
     logic bus_resp_pf;
     logic bus_resp_af;
     always_comb begin
-        bus_resp_valid = bus_resp_finish || (bus_state == BUS_DONE);
+        bus_resp_valid = bus_resp || (bus_state == BUS_DONE);
 
         if (bus_state == BUS_DONE) begin
             bus_resp_rdata = bus_resp_rdata_q;
@@ -404,7 +401,7 @@ module dcache #(
 
     // 4. CPU 返回
     always_comb begin
-        ready_o = !req_i || hit_load || store_ready || bus_resp_valid;
+        ready_o = !req_i || hit_load || sb_store_ready || bus_resp_valid;
         rdata_o = hit_load ? data_arr[line_idx] : bus_resp_rdata;
         page_fault_o = bus_resp_valid && bus_resp_pf;
         access_fault_o = bus_resp_valid && bus_resp_af;

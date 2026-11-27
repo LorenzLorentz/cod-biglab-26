@@ -132,7 +132,6 @@ module thinpad_top (
     logic cpu_mstatus_mxr;
     logic cpu_fence_i_flush;
     logic cpu_sb_empty;
-    logic cpu_icache_idle;
     logic cpu_icache_busy;
 
     logic timer_irq;
@@ -163,7 +162,7 @@ module thinpad_top (
         .fence_i_flush(cpu_fence_i_flush),
         .timer_irq(timer_irq),
         .sb_empty(cpu_sb_empty),
-        .icache_idle(!cpu_icache_idle)
+        .icache_idle(!cpu_icache_busy)
     );
 
     // I-Cache
