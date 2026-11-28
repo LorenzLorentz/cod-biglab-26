@@ -82,13 +82,12 @@ module thinpad_top (
 
     /* =========== Demo code begin =========== */
 
-    // PLL 分频示例
-    logic locked, clk_10M, clk_20M;
+    logic locked, clk_cpu, clk_20M;
     pll_example clock_gen (
         // Clock in ports
         .clk_in1(clk_50M),  // 外部时钟输入
         // Clock out ports
-        .clk_out1(clk_10M),  // 时钟输出 1，频率在 IP 配置界面中设置
+        .clk_out1(clk_cpu),  // 时钟输出 1，频率在 IP 配置界面中设置
         .clk_out2(clk_20M),  // 时钟输出 2，频率在 IP 配置界面中设置
         // Status and control signals
         .reset(reset_btn),  // PLL 复位输入
@@ -96,24 +95,25 @@ module thinpad_top (
                         // 后级电路复位信号应当由它生成（见下）
     );
 
-    logic reset_of_clk10M;
-    // 异步复位，同步释放，将 locked 信号转为后级电路的复位 reset_of_clk10M
-    always_ff @(posedge clk_10M or negedge locked) begin
-        if (~locked) reset_of_clk10M <= 1'b1;
-        else reset_of_clk10M <= 1'b0;
+    logic reset_of_clk_cpu;
+    always_ff @(posedge clk_cpu or negedge locked) begin
+        if (~locked) reset_of_clk_cpu <= 1'b1;
+        else reset_of_clk_cpu <= 1'b0;
     end
 
     /* =========== Demo code end =========== */
 
     // 时钟和重置信号
-    wire sys_clk = clk_10M;
-    wire sys_rst = reset_of_clk10M;
+    wire sys_clk = clk_cpu;
+    wire sys_rst = reset_of_clk_cpu;
 
     // cpu
     logic cpu_inst_req;
     logic [31:0] cpu_inst_addr;
     logic [31:0] cpu_inst_data;
     logic cpu_inst_ready;
+    logic cpu_inst_page_fault;
+    logic cpu_inst_access_fault;
 
     logic cpu_mem_req;
     logic [31:0] cpu_mem_addr;
@@ -122,6 +122,19 @@ module thinpad_top (
     logic cpu_mem_we;
     logic [3:0] cpu_mem_sel;
     logic cpu_mem_ready;
+    logic cpu_mem_page_fault;
+    logic cpu_mem_access_fault;
+
+    logic [31:0] cpu_satp;
+    logic [1:0] cpu_inst_priv;
+    logic [1:0] cpu_mem_priv;
+    logic cpu_mstatus_sum;
+    logic cpu_mstatus_mxr;
+    logic cpu_fence_i_flush;
+    logic cpu_sb_empty;
+    logic cpu_icache_busy;
+
+    logic timer_irq;
 
     cpu_top u_cpu (
         .clk(sys_clk),
@@ -130,13 +143,113 @@ module thinpad_top (
         .inst_addr(cpu_inst_addr),
         .inst_data(cpu_inst_data),
         .inst_ready(cpu_inst_ready),
+        .inst_page_fault(cpu_inst_page_fault),
+        .inst_access_fault(cpu_inst_access_fault),
         .mem_req(cpu_mem_req),
         .mem_addr(cpu_mem_addr),
         .mem_wdata(cpu_mem_wdata),
         .mem_rdata(cpu_mem_rdata),
         .mem_we(cpu_mem_we),
         .mem_sel(cpu_mem_sel),
-        .mem_ready(cpu_mem_ready)
+        .mem_ready(cpu_mem_ready),
+        .mem_page_fault(cpu_mem_page_fault),
+        .mem_access_fault(cpu_mem_access_fault),
+        .satp(cpu_satp),
+        .inst_priv(cpu_inst_priv),
+        .mem_priv(cpu_mem_priv),
+        .mstatus_sum(cpu_mstatus_sum),
+        .mstatus_mxr(cpu_mstatus_mxr),
+        .fence_i_flush(cpu_fence_i_flush),
+        .timer_irq(timer_irq),
+        .sb_empty(cpu_sb_empty),
+        .icache_idle(!cpu_icache_busy)
+    );
+
+    // I-Cache
+    logic wb_inst_req;
+    logic [31:0] wb_inst_addr;
+    logic [31:0] wb_inst_rdata;
+    logic wb_inst_ready;
+    logic wb_inst_page_fault;
+    logic wb_inst_access_fault;
+    logic wb_inst_idle;
+
+    icache u_icache (
+        .clk(sys_clk),
+        .rst(sys_rst),
+        .satp_i(cpu_satp),
+        .flush_i(cpu_fence_i_flush),
+        .req_i(cpu_inst_req),
+        .addr_i(cpu_inst_addr),
+        .rdata_o(cpu_inst_data),
+        .ready_o(cpu_inst_ready),
+        .page_fault_o(cpu_inst_page_fault),
+        .access_fault_o(cpu_inst_access_fault),
+        .wb_req_o(wb_inst_req),
+        .wb_addr_o(wb_inst_addr),
+        .wb_rdata_i(wb_inst_rdata),
+        .wb_ready_i(wb_inst_ready),
+        .wb_idle_i(wb_inst_idle),
+        .wb_page_fault_i(wb_inst_page_fault),
+        .wb_access_fault_i(wb_inst_access_fault),
+        .busy_o(cpu_icache_busy),
+        .merge_addr_o(ic_merge_addr),
+        .merge_data_o(ic_merge_data),
+        .merge_data_i(dc_merge_data),
+        .st_req_i(dc_snoop_valid),
+        .st_addr_i(dc_snoop_addr)
+    );
+
+    // D-Cache
+    logic wb_mem_req;
+    logic wb_mem_we;
+    logic [3:0] wb_mem_sel;
+    logic [31:0] wb_mem_addr;
+    logic [31:0] wb_mem_wdata;
+    logic [31:0] wb_mem_rdata;
+    logic wb_mem_ready;
+    logic wb_mem_page_fault;
+    logic wb_mem_access_fault;
+    logic wb_mem_idle;
+    logic cpu_step;
+    logic dc_snoop_valid;
+    logic [31:0] dc_snoop_addr;
+    logic [31:0] ic_merge_addr;
+    logic [31:0] ic_merge_data;
+    logic [31:0] dc_merge_data;
+
+    assign cpu_step = cpu_inst_ready && cpu_mem_ready;
+
+    dcache u_dcache (
+        .clk(sys_clk),
+        .rst(sys_rst),
+        .satp_i(cpu_satp),
+        .cpu_step_i(cpu_step),
+        .req_i(cpu_mem_req),
+        .we_i(cpu_mem_we),
+        .sel_i(cpu_mem_sel),
+        .addr_i(cpu_mem_addr),
+        .wdata_i(cpu_mem_wdata),
+        .rdata_o(cpu_mem_rdata),
+        .ready_o(cpu_mem_ready),
+        .page_fault_o(cpu_mem_page_fault),
+        .access_fault_o(cpu_mem_access_fault),
+        .wb_req_o(wb_mem_req),
+        .wb_we_o(wb_mem_we),
+        .wb_sel_o(wb_mem_sel),
+        .wb_addr_o(wb_mem_addr),
+        .wb_wdata_o(wb_mem_wdata),
+        .wb_rdata_i(wb_mem_rdata),
+        .wb_ready_i(wb_mem_ready),
+        .wb_idle_i(wb_mem_idle),
+        .wb_page_fault_i(wb_mem_page_fault),
+        .wb_access_fault_i(wb_mem_access_fault),
+        .sb_empty_o(cpu_sb_empty),
+        .snoop_valid_o(dc_snoop_valid),
+        .snoop_addr_o(dc_snoop_addr),
+        .merge_addr_i(ic_merge_addr),
+        .merge_data_i(ic_merge_data),
+        .merge_data_o(dc_merge_data)
     );
 
     // 总线
@@ -153,17 +266,28 @@ module thinpad_top (
     wb_master u_wb_master (
         .clk_i(sys_clk),
         .rst_i(sys_rst),
-        .inst_req_i(cpu_inst_req),
-        .inst_addr_i(cpu_inst_addr),
-        .inst_rdata_o(cpu_inst_data),
-        .inst_ready_o(cpu_inst_ready),
-        .mem_req_i(cpu_mem_req),
-        .mem_we_i(cpu_mem_we),
-        .mem_sel_i(cpu_mem_sel),
-        .mem_addr_i(cpu_mem_addr),
-        .mem_wdata_i(cpu_mem_wdata),
-        .mem_rdata_o(cpu_mem_rdata),
-        .mem_ready_o(cpu_mem_ready),
+        .satp_i(cpu_satp),
+        .inst_priv_i(cpu_inst_priv),
+        .mem_priv_i(cpu_mem_priv),
+        .sum_i(cpu_mstatus_sum),
+        .mxr_i(cpu_mstatus_mxr),
+        .inst_req_i(wb_inst_req),
+        .inst_addr_i(wb_inst_addr),
+        .inst_rdata_o(wb_inst_rdata),
+        .inst_ready_o(wb_inst_ready),
+        .inst_page_fault_o(wb_inst_page_fault),
+        .inst_access_fault_o(wb_inst_access_fault),
+        .inst_idle_o(wb_inst_idle),
+        .mem_req_i(wb_mem_req),
+        .mem_we_i(wb_mem_we),
+        .mem_sel_i(wb_mem_sel),
+        .mem_addr_i(wb_mem_addr),
+        .mem_wdata_i(wb_mem_wdata),
+        .mem_rdata_o(wb_mem_rdata),
+        .mem_ready_o(wb_mem_ready),
+        .mem_page_fault_o(wb_mem_page_fault),
+        .mem_access_fault_o(wb_mem_access_fault),
+        .mem_idle_o(wb_mem_idle),
         .wb_cyc_o(wbm_cyc_o),
         .wb_stb_o(wbm_stb_o),
         .wb_ack_i(wbm_ack_i),
@@ -204,7 +328,25 @@ module thinpad_top (
     logic [3:0] wbs2_sel_o;
     logic wbs2_we_o;
 
-    wb_mux_3 wb_mux (
+    logic wbs3_cyc_o;
+    logic wbs3_stb_o;
+    logic wbs3_ack_i;
+    logic [31:0] wbs3_adr_o;
+    logic [31:0] wbs3_dat_o;
+    logic [31:0] wbs3_dat_i;
+    logic [3:0] wbs3_sel_o;
+    logic wbs3_we_o;
+
+    logic wbs4_cyc_o;
+    logic wbs4_stb_o;
+    logic wbs4_ack_i;
+    logic [31:0] wbs4_adr_o;
+    logic [31:0] wbs4_dat_o;
+    logic [31:0] wbs4_dat_i;
+    logic [3:0] wbs4_sel_o;
+    logic wbs4_we_o;
+
+    wb_mux_5 wb_mux (
         .clk(sys_clk),
         .rst(sys_rst),
 
@@ -266,7 +408,39 @@ module thinpad_top (
         .wbs2_ack_i(wbs2_ack_i),
         .wbs2_err_i('0),
         .wbs2_rty_i('0),
-        .wbs2_cyc_o(wbs2_cyc_o)
+        .wbs2_cyc_o(wbs2_cyc_o),
+
+        // Slave interface 3 (to NPU)
+        // Address range: 0x2000_0000 ~ 0x2000_FFFF
+        .wbs3_addr    (32'h2000_0000),
+        .wbs3_addr_msk(32'hFFFF_0000),
+
+        .wbs3_adr_o(wbs3_adr_o),
+        .wbs3_dat_i(wbs3_dat_i),
+        .wbs3_dat_o(wbs3_dat_o),
+        .wbs3_we_o (wbs3_we_o),
+        .wbs3_sel_o(wbs3_sel_o),
+        .wbs3_stb_o(wbs3_stb_o),
+        .wbs3_ack_i(wbs3_ack_i),
+        .wbs3_err_i('0),
+        .wbs3_rty_i('0),
+        .wbs3_cyc_o(wbs3_cyc_o),
+
+        // Slave interface 4 (to CLINT)
+        // Address range: 0x0200_0000 ~ 0x0200_FFFF
+        .wbs4_addr    (32'h0200_0000),
+        .wbs4_addr_msk(32'hFFFF_0000),
+
+        .wbs4_adr_o(wbs4_adr_o),
+        .wbs4_dat_i(wbs4_dat_i),
+        .wbs4_dat_o(wbs4_dat_o),
+        .wbs4_we_o (wbs4_we_o),
+        .wbs4_sel_o(wbs4_sel_o),
+        .wbs4_stb_o(wbs4_stb_o),
+        .wbs4_ack_i(wbs4_ack_i),
+        .wbs4_err_i('0),
+        .wbs4_rty_i('0),
+        .wbs4_cyc_o(wbs4_cyc_o)
     );
 
     /* =========== lab4 MUX end =========== */
@@ -327,7 +501,7 @@ module thinpad_top (
     // 串口控制器模块
     // NOTE: 如果修改系统时钟频率，也需要修改此处的时钟频率参数
     uart_controller #(
-        .CLK_FREQ(10_000_000),
+        .CLK_FREQ(50_000_000),
         .BAUD    (115200)
     ) uart_controller (
         .clk_i(sys_clk),
@@ -345,6 +519,39 @@ module thinpad_top (
         // to UART pins
         .uart_txd_o(txd),
         .uart_rxd_i(rxd)
+    );
+
+    // NPU模块
+    npu_top u_npu (
+        .clk_i  (sys_clk),
+        .rst_i  (sys_rst),
+
+        .wb_adr_i(wbs3_adr_o),
+        .wb_dat_i(wbs3_dat_o),
+        .wb_dat_o(wbs3_dat_i),
+        .wb_we_i (wbs3_we_o),
+        .wb_sel_i(wbs3_sel_o),
+        .wb_stb_i(wbs3_stb_o),
+        .wb_ack_o(wbs3_ack_i),
+        .wb_cyc_i(wbs3_cyc_o),
+        .wb_err_o(),
+        .wb_rty_o()
+    );
+
+    clint u_clint (
+        .clk_i(sys_clk),
+        .rst_i(sys_rst),
+
+        .wb_cyc_i(wbs4_cyc_o),
+        .wb_stb_i(wbs4_stb_o),
+        .wb_ack_o(wbs4_ack_i),
+        .wb_adr_i(wbs4_adr_o),
+        .wb_dat_i(wbs4_dat_o),
+        .wb_dat_o(wbs4_dat_i),
+        .wb_sel_i(wbs4_sel_o),
+        .wb_we_i (wbs4_we_o),
+
+        .timer_irq_o(timer_irq)
     );
 
     /* =========== lab4 Slaves end =========== */

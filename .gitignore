@@ -11,6 +11,7 @@ thinpad_top.ip_user_files/
 /.lint/
 /.Xil
 /.Xilinx
+cpu.drawio
 
 # 本地构建
 build/

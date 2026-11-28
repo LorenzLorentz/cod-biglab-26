@@ -2,11 +2,21 @@ module wb_master (
     input logic clk_i,
     input logic rst_i,
 
+    // satp 和特权级
+    input logic [31:0] satp_i,
+    input logic [1:0] inst_priv_i,
+    input logic [1:0] mem_priv_i,
+    input logic sum_i,
+    input logic mxr_i,
+
     // 指令总线
     input logic inst_req_i,
     input logic [31:0] inst_addr_i,
     output logic [31:0] inst_rdata_o,
     output logic inst_ready_o,
+    output logic inst_page_fault_o,
+    output logic inst_access_fault_o,
+    output logic inst_idle_o,
 
     // 数据总线
     input logic mem_req_i,
@@ -16,6 +26,9 @@ module wb_master (
     input logic [31:0] mem_wdata_i,
     output logic [31:0] mem_rdata_o,
     output logic mem_ready_o,
+    output logic mem_page_fault_o,
+    output logic mem_access_fault_o,
+    output logic mem_idle_o,
 
     // wb
     output logic wb_cyc_o,
@@ -29,108 +42,82 @@ module wb_master (
     output logic wb_we_o
 );
     // 内部状态
-    // 请求锁存
-    logic [31:0] inst_addr_q;
-    logic [31:0] mem_addr_q;
-    logic [31:0] mem_wdata_q;
-    logic [3:0] mem_sel_q;
-    logic mem_we_q;
+    logic cpu_step;
+    assign cpu_step = inst_ready_o && mem_ready_o;
 
-    // 返回锁存
-    logic [31:0] inst_rdata_a;
-    logic inst_ack_a;
-    logic inst_err_a;
-    logic [31:0] mem_rdata_a;
-    logic mem_ack_a;
-    logic mem_err_a;
+    // 指令
+    logic inst_bus_req;
+    logic inst_bus_ack;
+    logic inst_bus_err;
+    logic [31:0] inst_bus_addr;
+    logic [31:0] inst_bus_rdata;
 
-    // 状态定义
-    // CPU 侧的 req 表示持续需求；Wishbone 的 cyc/stb 表示一笔正在
-    // 进行的事务。两路状态机负责把持续请求拆成单次总线访问。
-    typedef enum logic [1:0] {
-        REQ_IDLE,
-        REQ_BUSY,
-        REQ_DONE
-    } req_state_t;
+    // 内存
+    logic mem_bus_req;
+    logic mem_bus_ack;
+    logic mem_bus_err;
+    logic mem_bus_we;
+    logic [31:0] mem_bus_addr;
+    logic [31:0] mem_bus_wdata;
+    logic [31:0] mem_bus_rdata;
+    logic [3:0] mem_bus_sel;
 
-    req_state_t inst_state;
-    req_state_t mem_state;
+    sv32_wb_channel #(.INSTRUCTION(1'b1)) u_inst_channel (
+        .clk_i(clk_i),
+        .rst_i(rst_i),
+        .satp_i(satp_i),
+        .priv_i(inst_priv_i),
+        .sum_i(sum_i),
+        .mxr_i(mxr_i),
+        .req_i(inst_req_i),
+        .vaddr_i(inst_addr_i),
+        .we_i(1'b0),
+        .sel_i(4'b1111),
+        .wdata_i(32'b0),
+        .rdata_o(inst_rdata_o),
+        .ready_o(inst_ready_o),
+        .page_fault_o(inst_page_fault_o),
+        .access_fault_o(inst_access_fault_o),
+        .idle_o(inst_idle_o),
+        .cpu_step_i(cpu_step),
+        .wb_req_o(inst_bus_req),
+        .wb_adr_o(inst_bus_addr),
+        .wb_we_o(),
+        .wb_sel_o(),
+        .wb_dat_o(),
+        .wb_dat_i(inst_bus_rdata),
+        .wb_ack_i(inst_bus_ack),
+        .wb_err_i(inst_bus_err)
+    );
 
-    // ready 信号
-    always_comb begin
-        inst_ready_o = !inst_req_i || (inst_state == REQ_DONE);
-        mem_ready_o = !mem_req_i || (mem_state == REQ_DONE);
-    end
+    sv32_wb_channel u_mem_channel (
+        .clk_i(clk_i),
+        .rst_i(rst_i),
+        .satp_i(satp_i),
+        .priv_i(mem_priv_i),
+        .sum_i(sum_i),
+        .mxr_i(mxr_i),
+        .req_i(mem_req_i),
+        .vaddr_i(mem_addr_i),
+        .we_i(mem_we_i),
+        .sel_i(mem_sel_i),
+        .wdata_i(mem_wdata_i),
+        .rdata_o(mem_rdata_o),
+        .ready_o(mem_ready_o),
+        .page_fault_o(mem_page_fault_o),
+        .access_fault_o(mem_access_fault_o),
+        .idle_o(mem_idle_o),
+        .cpu_step_i(cpu_step),
+        .wb_req_o(mem_bus_req),
+        .wb_adr_o(mem_bus_addr),
+        .wb_we_o(mem_bus_we),
+        .wb_sel_o(mem_bus_sel),
+        .wb_dat_o(mem_bus_wdata),
+        .wb_dat_i(mem_bus_rdata),
+        .wb_ack_i(mem_bus_ack),
+        .wb_err_i(mem_bus_err)
+    );
 
-    wire is_cpu_step_done = inst_ready_o && mem_ready_o;
-
-    // 状态机
-    // inst
-    always_ff @(posedge clk_i) begin
-        if (rst_i) begin
-            inst_state <= REQ_IDLE;
-        end else if (is_cpu_step_done) begin
-            inst_state <= REQ_IDLE;
-        end else begin
-            case (inst_state)
-                REQ_IDLE: begin
-                    if (inst_req_i) begin
-                        inst_addr_q <= inst_addr_i;
-                        inst_state <= REQ_BUSY;
-                    end
-                end
-
-                REQ_BUSY: begin
-                    if (inst_ack_a) begin
-                        inst_rdata_o <= inst_rdata_a;
-                        inst_state <= REQ_DONE;
-                    end else if (inst_err_a) begin
-                        inst_rdata_o <= 32'b0;
-                        inst_state <= REQ_DONE;
-                    end
-                end
-
-                REQ_DONE: inst_state <= REQ_DONE;
-                default: inst_state <= REQ_IDLE;
-            endcase
-        end
-    end
-
-    // mem
-    always_ff @(posedge clk_i) begin
-        if (rst_i) begin
-            mem_state <= REQ_IDLE;
-        end else if (is_cpu_step_done) begin
-            mem_state <= REQ_IDLE;
-        end else begin
-            case (mem_state)
-                REQ_IDLE: begin
-                    if (mem_req_i) begin
-                        mem_addr_q <= mem_addr_i;
-                        mem_wdata_q <= mem_wdata_i;
-                        mem_we_q <= mem_we_i;
-                        mem_sel_q <= mem_sel_i;
-                        mem_state <= REQ_BUSY;
-                    end
-                end
-
-                REQ_BUSY: begin
-                    if (mem_ack_a) begin
-                        mem_rdata_o <= mem_rdata_a;
-                        mem_state <= REQ_DONE;
-                    end else if (mem_err_a) begin
-                        mem_rdata_o <= 32'b0;
-                        mem_state <= REQ_DONE;
-                    end
-                end
-
-                REQ_DONE: mem_state <= REQ_DONE;
-                default: mem_state <= REQ_IDLE;
-            endcase
-        end
-    end
-
-    // 执行
     // 仲裁器
     wb_arbiter_2 #(
         .DATA_WIDTH(32),
@@ -143,28 +130,28 @@ module wb_master (
         .rst(rst_i),
 
         // wm0; inst
-        .wbm0_adr_i(inst_addr_q),
+        .wbm0_adr_i(inst_bus_addr),
         .wbm0_dat_i(32'b0),
-        .wbm0_dat_o(inst_rdata_a),
+        .wbm0_dat_o(inst_bus_rdata),
         .wbm0_we_i(1'b0),
         .wbm0_sel_i(4'b1111),
-        .wbm0_stb_i(inst_state == REQ_BUSY),
-        .wbm0_ack_o(inst_ack_a),
-        .wbm0_err_o(inst_err_a),
+        .wbm0_stb_i(inst_bus_req),
+        .wbm0_ack_o(inst_bus_ack),
+        .wbm0_err_o(inst_bus_err),
         .wbm0_rty_o(),
-        .wbm0_cyc_i(inst_state == REQ_BUSY),
+        .wbm0_cyc_i(inst_bus_req),
 
         // wm1; mem
-        .wbm1_adr_i(mem_addr_q),
-        .wbm1_dat_i(mem_wdata_q),
-        .wbm1_dat_o(mem_rdata_a),
-        .wbm1_we_i(mem_we_q),
-        .wbm1_sel_i(mem_sel_q),
-        .wbm1_stb_i(mem_state == REQ_BUSY),
-        .wbm1_ack_o(mem_ack_a),
-        .wbm1_err_o(mem_err_a),
+        .wbm1_adr_i(mem_bus_addr),
+        .wbm1_dat_i(mem_bus_wdata),
+        .wbm1_dat_o(mem_bus_rdata),
+        .wbm1_we_i(mem_bus_we),
+        .wbm1_sel_i(mem_bus_sel),
+        .wbm1_stb_i(mem_bus_req),
+        .wbm1_ack_o(mem_bus_ack),
+        .wbm1_err_o(mem_bus_err),
         .wbm1_rty_o(),
-        .wbm1_cyc_i(mem_state == REQ_BUSY),
+        .wbm1_cyc_i(mem_bus_req),
 
         // ws
         .wbs_adr_o(wb_adr_o),
